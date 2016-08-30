@@ -2,131 +2,260 @@
 
 ###########################################################################
 ##
-##  水分子調整プログラム					Last Update 2012/01/31
-##   *VIEWモード
-##     $ wtune -V PDBファイル
-##   *数調整モード
-##    $ wtune -N 残す水分子数 入力ファイル 出力ファイル
-##	 *距離調整モード
-##	  $ wtune -D 残す水分子の距離範囲 入力ファイル 出力ファイル
-##	 *距離測定モード(タンパク質からの距離を測定)
-##	  $ wtune -S (s/S/l/L) PDBファイル
+##  水分子調整プログラム					Last Update 2012/07/31
+##  $ wtune OPTIONS [SUB_OPTION] INPUT [OUTPUT]
+##  
+##  OPTIONS
+##   -V, --view      水分子数と総原子数を表示
+##   -N, --number    水分子数で調整 (水分子数を指定)
+##   -D, --distance  水分子の距離で調整 (距離を指定)
+##   -M, --measure   溶質と水分子間の距離を測定(サブオプションが必要)
+##       s, short    最短距離を測定 (一般的)
+##       l, long     最長距離を測定
+##   -T, --thread    並列スレッド数 (スレッド数を指定)
+##   -Y, --hydrogen  水素原子も含めて判断 (デフォルト: 酸素原子のみ)
+##   -P, --part      指定した領域周辺の水分子を処理(サブオプションと範囲が必要)
+##       L:<RANGE>   行数で指定
+##       AN:<RANGE>  原子順序番号で指定
+##       RN:<RANGE>  残基番号で指定
+##   -H, --help      ヘルプ
 ##
 ###########################################################################
 
 use strict;
 use File::Temp;
+use threads;
+use File::Basename;
 
-my $option = shift(@ARGV);
-my $num = shift(@ARGV);
-my $in = shift(@ARGV);
-my $out = shift(@ARGV);
-
-if(($option =~ /^--help$/i) || ($option =~ /^-H$/i)){
-	&help;
-}
-elsif(($option =~ /^--view$/i) || ($option =~ /^-V$/i)){
-	if(-f $num){
-		&view($num);
+my $flag = 0;			# オプション振り分けフラグ
+my $option = 0;		# 操作(モード)
+my $value = 0;
+my $thread = 1;		# スレッド数
+my $range = 0;			# 距離ソートフラグ(最短/最長)
+my $hydrogen = 1;		# 水素原子考慮フラグ
+my $parttype = 0;		# 部分指定のタイプ (1: 行，2: 原子順序番号，3: 残基番号)
+my $partpoint = "";	# 部分指定場所
+my $in = "";			# 入力ファイル
+my $out = "";			# 出力ファイル
+foreach(@ARGV){
+	if($flag == 1){	# thread
+		$thread = &check_int($_);
+		if($thread == 0){
+			print " ERROR: Invalid argument (Not 0)\n";
+			exit;
+		}
+		$flag = 0;
 	}
-	else{
-		print " ERROR: No such file or directory: $in\n";
+	elsif($flag == 2){		# view
+		my $in = &check_file($_);
+		&view($in);
+		exit;
 	}
-}
-else{
-	if(($option =~ /^-S$/i) || ($option =~ /^--number$/i) || ($option =~ /^-N$/i) || ($option =~ /^--distance$/i) || ($option =~ /^-D$/i)){
-		if(-f $in){
-			my $pro = File::Temp->new(TEMPLATE => '.wtune-1XXXXXX');
-			my $wat = File::Temp->new(TEMPLATE => '.wtune-2XXXXXX');
-			my $tmp = File::Temp->new(TEMPLATE => '.wtune-3XXXXXX');
-			$SIG{'TERM'} = $SIG{'PIPE'} = $SIG{'HUP'} = $SIG{'INT'} = sub {
-				unlink $pro;
-				unlink $wat;
-				unlink $tmp;
-				exit;
-			};	# プログラムが中断した場合の処理
-			&separate($in, $pro, $wat);	#構造を水とタンパク質に分解
-			my @list = ();
-			if(($option =~ /^--distance$/i) || ($option =~ /^-D$/i)){
-				if($num =~ /^\d+(\.\d+)?$/){
-					@list = &discalc($num, $pro, $wat);	#距離で処理
-				}
-				else{
-					print " ERROR: Invalid argument (Only integer or float)";
-					exit;
-				}
+	elsif($flag == 3){		# distance
+		$value = &check_float($_);
+		$flag = 0;
+	}
+	elsif($flag == 4){		# mount
+		$value = &check_int($_);
+		$flag = 0;
+	}
+	elsif($flag == 5){		# search
+		if((/^s$/i) || (/^short$/i)){
+			$range = 0;
+		}
+		elsif((/^l$/i) || (/^long$/i)){
+			$range = 9;
+		}
+		else{
+			print " ERROR: Need to sub-option\n";
+			exit;
+		}
+		$flag = 0;
+	}
+	elsif($flag == 6){
+		if(/^(l|(AN)|(RN)):\d+((,\d+)|(-\d+))*$/i){
+			($parttype, $partpoint) = split(/:/, $_, 2);
+			if($parttype =~ /^l$/i){		# 行指定
+				$parttype = 1;
 			}
-			elsif(($option =~ /^--number$/i) || ($option =~ /^-N$/i)){
-				if($num =~ /^\d+$/){
-					@list = &mountcalc($num, $pro, $wat);	#分子数で処理
-				}
-				else{
-					print " ERROR: Invalid argument (Only integer)";
-					exit;
-				}
+			elsif($parttype =~ /^AN$/i){	# 原子順序番号指定
+				$parttype = 2;
 			}
-			elsif(($option =~ /^--search$/i) || ($option =~ /^-S$/i)){
-				if(($num =~ /^[LS]$/i) || ($num =~ /^short$/i) || ($num =~ /^long$/i)){
-					if(($num =~ /^l$/) || ($num =~ /^long$/)){
-						$num = 1;
-					}
-					elsif(($num =~ /^L$/) || ($num =~ /^LONG$/)){
-						$num = 2;
-					}
-					elsif(($num =~ /^s$/) || ($num =~ /^short$/)){
-						$num = 3;
-					}
-					elsif(($num =~ /^S$/) || ($num =~ /^SHORT$/)){
-						$num = 4;
-					}
-					else{
-						print " ERROR: サブオプションの大文字，小文字が曖昧です．(short/SHORT/long/LONG)\n";
-						exit;
-					}
-					@list = &search($num, $pro, $wat);
-				}
-				else{
-					print " ERROR: サブオプションが指定されていません．(s/S/l/L)\n";
-				}
-				exit;
-			}
-			&create($pro, $wat, $tmp, @list);
-			
-			if($out =~ /^$/){	#出力先が指定されていない場合
-				print " INFORMATION: 出力先が指定されていません．\n";
-				print " INFORMATION: 上書き(O)，別名で保存(S)，何もしない(C)\n > ";
-				my $user = <STDIN>;
-				$user =~ s/\n//;
-				if($user =~ /^O$/i){
-					unlink $in;
-					rename $tmp, $in;
-				}
-				elsif($user =~ /^S$/i){
-					print " ファイル名: ";
-					$user = <STDIN>;
-					$user =~ s/\n//;
-					rename $tmp, $user;
-				}
-				else{
-					exit;
-				}
-			}
-			else{
-				rename $tmp, $out;
+			elsif($parttype =~ /^RN$/i){	# 残基番号指定
+				$parttype = 3;
 			}
 		}
 		else{
-			print " ERROR: 指定された入力ファイルは存在しません．\n";
+			print " WARNING: Invalid syntax; Ignored\n";
+		}
+		$flag = 0;
+	}
+	elsif($flag == 10){	# output
+		$out = $_;
+		$flag = 0;
+	}
+	# * # * # * # * # * # * # * # * # * #
+	elsif((/^--help$/i) || (/^-H$/i)){	# help
+		&help;
+		exit;
+	}
+	elsif((/^--thread$/i) || (/^-T$/i)){
+		$flag = 1;
+	}
+	elsif((/^--view$/i) || (/^-V$/i)){
+		$flag = 2;
+	}
+	elsif((/^--distance$/i) || (/^-D$/i)){
+		$flag = 3;
+		&check_option($option);
+		$option = 3;
+		$range = 0;
+	}
+	elsif((/^--number$/i) || (/^-N$/i)){
+		$flag = 4;
+		&check_option($option);
+		$option = 4;
+		$range = 0;
+	}
+	elsif((/^--measure$/i) || (/^-M$/i)){
+		$flag = 5;
+		&check_option($option);
+		$option = 5;
+	}
+	elsif((/^--hydrogen$/i) || (/^-Y$/i)){
+		$hydrogen = 3;
+	}
+	elsif((/^--part$/i) || (/^-P$/i)){
+		$flag = 6;
+	}
+	else{	# input
+		$in = &check_file($_);
+		$flag = 10;
+	}
+}
+
+if($in !~ /^$/){
+	my ($pro, $wat, $target) = &separate($in, $parttype, $partpoint);	# 構造を水とタンパク質，対象に分解
+	
+	my @wats = &return_array($wat);
+	my $wat_line = $#wats + 1;	# 行数取得
+	undef @wats;
+	$wat_line /= $thread;
+	$wat_line =~ s/\.\d+$//;		# 1ファイルあたりの行数
+	my @wats = &thread_separator($thread, $wat_line, $wat);	# 水分子を分割
+	
+	my @thread_datas = ();
+	if($thread == 1){		# 1 スレッドの場合，通常操作(1の時にスレッド処理しようとすると親と子で2プロセスで処理しようとして効率が悪い)
+		$thread_datas[0] = &discalc($hydrogen, $range, $target, $wats[0]);	# "距離\t行数\t残基名"
+	}
+	else{					# スレッドが指定されていた場合，スレッド処理
+		for(my $i = 1; $i <= $thread; $i ++){	# スレッド作成
+			push(@thread_datas, "");
+			$thread_datas[$i - 1] = threads -> new(\&discalc, $hydrogen, $range, $target, $wats[$i - 1]);	# "距離\t行数\t残基名"
+		}
+		for(my $i = 1; $i <= $thread; $i ++){	# スレッド待機
+			$thread_datas[$i - 1] = $thread_datas[$i - 1] -> join();
 		}
 	}
-	else{
-		print " ERROR: 未定義のオプションです．\n";
+	
+	my @datas = ();
+	foreach(@thread_datas){	# スレッドデータ統合
+		my @data_fragmented = &return_array($_);
+		push(@datas, @data_fragmented);
 	}
+	undef @thread_datas;
+	
+	if($option == 5){		# search mode
+		if($hydrogen == 1){
+			my @new_datas = ();
+			foreach(@datas){
+				my $line = $_;
+				my @lines = split(/\t/, $_, 3);		# "距離\t行数\t残基名"
+				$lines[2] = substr($lines[2], 11, 1);	# 原子名取得
+				if($lines[2] ne "H"){
+					push(@new_datas, $line);
+				}
+			}
+			@datas = @new_datas;
+			undef @new_datas;
+		}
+		if($range == 0){
+			@datas = sort {$a <=> $b} @datas;		# 距離でソート(昇順): 最短
+		}
+		elsif($range == 9){
+			@datas = sort {$a <=> $b} @datas;		# 距離でソート(降順): 最長
+		}
+		else{
+			print " ERROR: Subroutine error :: range is not correct\n";
+			exit;
+		}
+		&measure(@datas);
+		exit;
+	}
+	else{
+		@datas = &determine_main(@datas);		# "距離\t水分子順序リスト"
+		@datas = sort {$a <=> $b} @datas;		# 距離でソート
+		
+		my @new_datas = ();
+		if($option == 3){	# 距離で処理
+			foreach(@datas){
+				my ($distance, $water_order) = split(/\t+/, $_);			# 距離と水分子順序リストに分解
+				if($distance <= $value){				# 距離以下の場合
+					my @lines = split(/,/, $water_order);	# 水分子順序リストを分解
+					push(@new_datas, @lines);
+				}
+			}
+		}
+		elsif($option == 4){	# 数で処理
+			for(my $i = 0; $i < $value; $i ++){		# 指定された個数だけ処理
+				my ($distance, $water_order) = split(/\t+/, $datas[$i]);	# 距離と水分子順序リストに分解
+				my @lines = split(/,/, $water_order);		# 水分子順序リストに分解
+				push(@new_datas, @lines);
+			}
+		}
+		@datas = @new_datas;
+		undef @new_datas;
+		@datas = sort {$a <=> $b} @datas;
+
+		my $tmp = File::Temp->new(TEMPLATE => '.wtune-XXXXXX');
+		$SIG{'TERM'} = $SIG{'PIPE'} = $SIG{'HUP'} = $SIG{'INT'} = sub {
+			unlink $tmp;
+			exit;
+		};	# プログラムが中断した場合の処理
+		
+		&create($pro, $wat, $tmp, @datas);
+		if($out =~ /^$/){	# 出力先が指定されていない場合
+			print " INFORMATION: 出力先が指定されていません．\n";
+			print " INFORMATION: 上書き(O)，別名で保存(S)，何もしない(C)\n > ";
+			my $user = <STDIN>;
+			$user =~ s/\n//;
+			if($user =~ /^O$/i){
+				unlink $in;
+				rename $tmp, $in;
+			}
+			elsif($user =~ /^S$/i){
+				print " ファイル名: ";
+				$user = <STDIN>;
+				$user =~ s/\n//;
+				rename $tmp, $user;
+			}
+			else{
+				exit;
+			}
+		}
+		else{
+			rename $tmp, $out;
+		}	
+	}
+}
+else{
+	print " ERROR: No input file\n";
+	exit;
 }
 exit;
 
-# --------------- view --------------- #
-##PDBのステータス表示
+# =============== view =============== #
+## PDBのステータス表示
 sub view{
 my $in = $_[0];
 
@@ -136,306 +265,249 @@ my $wateratom = 0;
 open(IN, "$in");
 while(<IN>){
 	if((/^atom/i) || (/^hetatm/i)){
-		$atom++;	#総原子数
+		$atom++;	# 総原子数
 		my $line1 = substr($_, 11, 9);
 		my $line2 = substr($_, 17, 3);
-		if(($line2 =~ /HOH/) || ($line2 =~ /WAT/) || ($line2 =~ /SOL/)){	#水原子数
+		if(($line2 =~ /HOH/) || ($line2 =~ /WAT/) || ($line2 =~ /SOL/)){	# 水原子数
 			$wateratom++;
 		}
-		if(($line1 =~ /\s+O\s+HOH/) || ($line1 =~ /\s+O\s+WAT/) || ($line1 =~ /\s+OW\s+SOL/)){	#水分子数
+		if(($line1 =~ /\s+O\s+HOH/) || ($line1 =~ /\s+O\s+WAT/) || ($line1 =~ /\s+OW\s+SOL/)){	# 水分子数
 			$water++;
 		}
 	}
 }
 close(IN);
-$wateratom = $atom - $wateratom;	#他の原子数算出
+$wateratom = $atom - $wateratom;	# 他の原子数算出
 print " $in\n";
 print "  水分子数: $water\n";
 print "  他の原子: $wateratom\n";
 print "  総原子数: $atom\n";
 }
 
-# --------------- separate --------------- #
-##水とタンパク質に分割
+# =============== separate =============== #
+## 水とタンパク質に分割
 sub separate{
-my $in = shift(@_);	#元PDB
-my $pro = shift(@_);	#水以外の分子のPDB（出力）
-my $wat = shift(@_);	#水分子のPDB（出力）
+my $in = shift(@_);			# 元PDB
+my $parttype = shift(@_);		# 部分指定のタイプ
+my $partpoint = shift(@_);	# 部分指定場所
 
+my @partpoints = ();
+if($parttype != 0){
+	@partpoints = &range($partpoint);
+	$partpoint = "";
+}
+
+my @pros = ();
+my @wats = ();
+my @targets = ();
+my $wat_count = 0;
 my $beforeline = "";
 open(IN, "$in");
-open(PRO, "> $pro");
-open(WAT, "> $wat");
 while(<IN>){
+	s/\n//;
 	if((/^HETATM/i) || (/^ATOM/i)){
+		if($parttype == 2){		# 原子順序番号指定
+			$partpoint = substr($_, 6, 5);
+			$partpoint =~ s/\s+//g;
+		}
+		elsif($parttype == 3){	# 残基番号指定
+			$partpoint = substr($_, 22, 4);
+			$partpoint =~ s/\s+//g;
+		}
+		
 		my $data = substr($_, 17, 3);
-		if(($data =~ /^HOH$/i) || ($data =~ /^WAT$/) || ($data =~ /^SOL$/)){	#水分子
-			print WAT;
+		if(($data =~ /^HOH$/i) || ($data =~ /^WAT$/) || ($data =~ /^SOL$/)){	# 水分子
+			my $line_num = &adjust(10, $wat_count);
+			push(@wats, "$line_num\t$_");
+			$wat_count ++;
 		}
-		else{	#その他の分子
-			print PRO;
-		}
-	}
-	elsif(/^TER/){	#TERはPROに記述
-		if($beforeline ne $_){	#TERが連続しないようにする
-			print PRO "TER\n";
-			$beforeline = $_;
-		}
-	}
-}
-close(IN);
-close(WAT);
-close(PRO);
-}
-
-# --------------- discalc --------------- #
-##距離を計算し，距離で残すか判断．-> 残す水構成分子をファイルとして出力
-sub discalc{
-my $adistance = shift(@_);	#指定された距離
-my $pro = shift(@_);		#水以外の分子のPDB（入力）
-my $wat = shift(@_);		#水分子のPDB（入力）
-
-my @aminox = ();	#水以外の分子のx座標
-my @aminoy = ();	#水以外の分子のy座標
-my @aminoz = ();	#水以外の分子のz座標
-open(PRO, "$pro");
-while(<PRO>){
-	if((/^ATOM/i) || (/^HETATM/i)){
-		s/\n//;
-		my $prox = substr($_, 30, 8);
-		my $proy = substr($_, 38, 8);
-		my $proz = substr($_, 46, 8);
-		push(@aminox, $prox);	#その他の原子x座標取得
-		push(@aminoy, $proy);	#その他の原子y座標取得
-		push(@aminoz, $proz);	#その他の原子z座標取得
-	}
-}
-close(PRO);
-
-my @list1 = ();		#残す分子リスト
-open(WAT, "$wat");
-while(<WAT>){
-	my $line = $_;
-	s/\n//;
-	my $watx = substr($line, 30, 8);
-	my $waty = substr($line, 38, 8);
-	my $watz = substr($line, 46, 8);
-	my $count = 0;				#座標配列のためのカウンタ
-	foreach(@aminox){
-		my $ax = $_;					#水以外の分子のx座標
-		my $ay = $aminoy[$count];		#水以外の分子のy座標
-		my $az = $aminoz[$count];		#水以外の分子のz座標
-		my $calcdis = sqrt(($watx - $ax) ** 2 + ($waty - $ay) ** 2 + ($watz - $az) ** 2);	#距離の演算
-		if($calcdis <= $adistance){	#範囲内であるか
-			$line = substr($line, 17, 9);	#残基データ取得
-			push(@list1, $line);
-			last;
-		}
-		$count ++;
-	}
-}
-close(WAT);
-
-my @list1 = sort(@list1);	#残基データのソート
-my @list2 = ();
-my $beforedata = "";	#前の残基データ
-foreach(@list1){	#残基名が重複していたらスキップして，最終的に重複しないようにする
-	if($beforedata ne $_){
-		push(@list2, $_);
-		$beforedata = $_;
-	}
-}
-return @list2;
-}
-
-# --------------- mountcalc --------------- #
-##距離を計算し，距離+個数で残すか判断．-> 残す水構成分子をファイルとして出力
-sub mountcalc{
-my $mount = shift(@_);	#指定された水分子
-my $pro = shift(@_);		#水以外の分子のPDB（入力）
-my $wat = shift(@_);		#水分子のPDB（入力）
-
-my @aminox = ();	#水以外の分子のx座標
-my @aminoy = ();	#水以外の分子のy座標
-my @aminoz = ();	#水以外の分子のz座標
-open(PRO, "$pro");
-while(<PRO>){	#タンパク質構造ファイル
-	if((/^HETATM/i) || (/^ATOM/i)){
-		s/\n//;
-		my $prox = substr($_, 30, 8);
-		my $proy = substr($_, 38, 8);
-		my $proz = substr($_, 46, 8);
-		push(@aminox, $prox);	#その他の原子x座標取得
-		push(@aminoy, $proy);	#その他の原子y座標取得
-		push(@aminoz, $proz);	#その他の原子z座標取得
-	}
-}
-close(PRO);
-
-my %alldistance = ();	#計算した順番と最終距離データを格納する
-my %allresidue = ();	#計算した順番と残基データを格納する
-my $datanum = 0;	#計算した順番
-open(WAT, "$wat");
-while(<WAT>){	#水分子の構造ファイル
-	my $line = $_;
-	s/\n//;
-	my $watx = substr($line, 30, 8);
-	my $waty = substr($line, 38, 8);
-	my $watz = substr($line, 46, 8);
-	my $count = 0;	#配列番号
-	my @distance = ();	#演算した距離を格納
-	foreach(@aminox){
-		my $ax = $_;					#水以外の分子のx座標
-		my $ay = $aminoy[$count];		#水以外の分子のy座標
-		my $az = $aminoz[$count];		#水以外の分子のz座標
-		my $calcdis = sqrt(($watx - $ax) ** 2 + ($waty - $ay) ** 2 + ($watz - $az) ** 2);	#距離の演算
-		push(@distance, $calcdis);		#距離をdistanceに格納
-		$count ++;
-	}
-	@distance = sort {$a <=> $b} (@distance);	#距離をソートし，最短距離を配列先頭へ
-	$line = substr($line, 17, 9);	#現在の残基データを取得
-	$allresidue{$datanum} = $line;	#計算番号と残基データ
-	$alldistance{$datanum} = $distance[0];	#計算番号と距離(上のハッシュとは計算番号で同期)
-	$datanum ++;
-}
-close(WAT);
-
-my @list1 = ();
-foreach my $residuenum (sort{$alldistance{$a} <=> $alldistance{$b}} keys %alldistance){	#ハッシュを距離でソートし，残基データをリストへ
-	my $flag = 0;	#既に登録されている残基データと重複しないようにするフラグ(このプログラムは水分子の一部がタンパク質に最も近い部分を水分子の座標と認識する)
-	foreach(@list1){
-		if($_ eq $allresidue{$residuenum}){	#既に登録済み
-			$flag = 1;
-		}
-	}
-	if($flag == 0){	#登録されていない場合，登録する
-		push(@list1, $allresidue{$residuenum});
-	}
-}
-
-my @list2 = ();	#最終的なリスト
-for(my $count = 0; $count < $mount; $count++){	#指定した数に調整する
-	push(@list2, $list1[$count]);
-}
-@list2 = sort(@list2);	#ここで，リストをソートする
-return @list2;
-}
-
-# --------------- create --------------- #
-##リストを元にPDBを作成する
-sub create{
-my $pro = shift(@_);	#元のPDBファイル（入力）
-my $wat = shift(@_);	#水分子ファイル（出力・入力）
-my $out = shift(@_);	#出力するPDBファイル（出力）
-my @list = @_;	#残す水分子残基データ
-
-my $tmp = File::Temp->new(TEMPLATE => '.wtune-cXXXXXX');
-open(OUT, "> $tmp");
-open(IN, "$pro");
-while(<IN>){
-	print OUT;
-}
-close(IN);
-
-my $beforedata = "";
-open(IN, "$wat");
-while(<IN>){
-	my $line = $_;
-	my $data = substr($_, 17, 9);	#残基データ取得
-	foreach(@list){
-		if($_ eq $data){	#残基データと残す水分子残基データが一致したら，出力する．
-			if($data ne $beforedata){
-				print OUT "TER\n";
-				$beforedata = $data;
+		else{	# その他の分子
+			push(@pros, $_);
+			
+			if(($parttype == 1) && (grep(/^$.$/, @partpoints))){
+				push(@targets, $_);
 			}
-			print OUT $line;
-			last;
+			elsif((($parttype == 2) || ($parttype == 3)) && (grep(/^$partpoint$/, @partpoints))){
+				push(@targets, $_);
+			}
 		}
 	}
-}
-close(IN);
-close(OUT);
-
-open(IN, "$tmp");
-open(OUT, "> $out");
-$beforedata = "";
-while(<IN>){	#重複するデータがないようにする
-	if($beforedata ne $_){
-		print OUT;
-		$beforedata = $_;
+	elsif(/^TER/){	# TERはPROに記述
+		if($beforeline ne $_){	# TERが連続しないようにする
+			push(@pros, "TER");
+		}
 	}
+	$beforeline = $_;
 }
-print OUT "END\n";
 close(IN);
-close(OUT);
-unlink $tmp;
+
+my $pro = join("\n", @pros);
+my $wat = join("\n", @wats);
+my $target = "";
+if($parttype == 0){
+	$target = $pro;
+}
+else{
+	$target = join("\n", @targets);
 }
 
-# --------------- search --------------- #
-## 距離を計算．タンパク質からの最短距離を表示．
-sub search{
-my $mode = shift(@_);
-my $pro = shift(@_);		#水以外の分子のPDB（入力）
-my $wat = shift(@_);		#水分子のPDB（入力）
+return $pro, $wat, $target;
+}
 
-my @aminox = ();	#水以外の分子のx座標
-my @aminoy = ();	#水以外の分子のy座標
-my @aminoz = ();	#水以外の分子のz座標
-open(PRO, "$pro");
-while(<PRO>){
+# =============== discalc =============== #
+## 距離を計算し，距離を出力
+sub discalc{
+my $option1 = shift(@_);	# 水分子の扱い(1: 酸素原子で判断; 3: 水素原子も含めて判断)
+my $option2 = shift(@_);	# 距離の扱い(0: 最短距離; 9: 最長距離) 
+my $pro = shift(@_);		# 水以外の分子のPDB（入力）
+my $wat = shift(@_);		# 水分子のPDB（入力）
+
+my @pros = &return_array($pro);
+my @aminox = ();	# 水以外の分子のx座標
+my @aminoy = ();	# 水以外の分子のy座標
+my @aminoz = ();	# 水以外の分子のz座標
+foreach(@pros){
 	if((/^ATOM/i) || (/^HETATM/i)){
 		s/\n//;
 		my $prox = substr($_, 30, 8);
 		my $proy = substr($_, 38, 8);
 		my $proz = substr($_, 46, 8);
-		push(@aminox, $prox);	#その他の原子x座標取得
-		push(@aminoy, $proy);	#その他の原子y座標取得
-		push(@aminoz, $proz);	#その他の原子z座標取得
+		push(@aminox, $prox);	# その他の原子x座標取得
+		push(@aminoy, $proy);	# その他の原子y座標取得
+		push(@aminoz, $proz);	# その他の原子z座標取得
 	}
 }
-close(PRO);
+undef $pro, @pros;
 
-open(WAT, "$wat");
-while(<WAT>){
-	my $line = $_;
-	$line =~ s/\n//;
-	my $atom = substr($line, 13, 1);	# 原子名取得
-	if(($atom eq "H") && (($mode == 1) || ($mode == 3))){	# 小文字モードの時は H を省略
+my @wats = &return_array($wat);
+my @results = ();		# 最終的な距離と水分子情報
+my @distances = ();		# 距離
+my @hydrogens = ();		# 水素原子を扱う場合に水分子の代表値となるものを決定するために必要な配列
+my @hydrogen_lines = ();	# 水素原子情報
+my $flag = 0;			# 最初
+my $before_residue = "";	# 前の残基名
+my $before_distance = 0;	# 水素原子のための前の距離保存用
+foreach(@wats){
+	my ($line_num, $line) = split(/\t+/, $_, 2);	# 水分子順序番号と分割
+	my $atom = substr($line, 12, 2);
+	my $atom_name = substr($line, 12, 4);
+	$atom =~ s/\d+//g;
+	$atom =~ s/\s//g;
+	if(($option1 == 1) && ($atom eq "H")){	# 酸素原子のみ扱う場合，水素原子はお断り
+		$line = substr($line, 17, 9);	# 残基データ取得
+		push(@hydrogen_lines, "$line_num\t$line\t$atom_name");
 		next;
 	}
 	my $watx = substr($line, 30, 8);
 	my $waty = substr($line, 38, 8);
 	my $watz = substr($line, 46, 8);
-	my $count = 0;				#座標配列のためのカウンタ
-	$line = substr($line, 17, 9);	#残基データ取得
-	my $memdistance = 0;
-	if($mode <= 2){		# タンパク質原子からの最長距離
-		$memdistance = 0;
-	}
-	else{
-		$memdistance = 9999;	# タンパク質原子からの最短距離(タンパク質表面からの距離)
-	}
+	$line = substr($line, 17, 9);	# 残基データ取得
+	my $count = 0;
 	foreach(@aminox){
-		my $ax = $_;					#水以外の分子のx座標
-		my $ay = $aminoy[$count];		#水以外の分子のy座標
-		my $az = $aminoz[$count];		#水以外の分子のz座標
-		my $calcdis = sqrt(($watx - $ax) ** 2 + ($waty - $ay) ** 2 + ($watz - $az) ** 2);	#距離の演算
-		if(($mode <= 2) && ($memdistance < $calcdis)){		# タンパク質原子からの最長距離
-			$memdistance = $calcdis;
-		}
-		elsif(($mode >= 3) && ($memdistance > $calcdis)){	# タンパク質原子からの最短距離(タンパク質表面からの距離)
-			$memdistance = $calcdis;
-		}
+		my $ax = $_;					# 水以外の分子のx座標
+		my $ay = $aminoy[$count];		# 水以外の分子のy座標
+		my $az = $aminoz[$count];		# 水以外の分子のz座標
+		my $calcdis = sqrt(($watx - $ax) ** 2 + ($waty - $ay) ** 2 + ($watz - $az) ** 2);	# 距離の演算
+		push(@distances, $calcdis);
 		$count ++;
 	}
-	$memdistance = &nearest($memdistance, 2);
-	$memdistance = &adjust(10, $memdistance);
-	print "$memdistance\t$line $atom\n";
-}
-close(WAT);
+	@distances = sort {$a <=> $b} @distances;			# 最短/最長距離算出
+	if($option2 == 0){
+		if(($option1 == 1) && ($#hydrogen_lines != -1)){
+			foreach(@hydrogen_lines){
+				push(@results, "$before_distance\t$_");
+			}
+			@hydrogen_lines = ();
+		}
+		push(@results, "$distances[0]\t$line_num\t$line\t$atom_name");	# "距離\t行数\t残基名"
+		$before_distance = $distances[0];	# 水素原子は酸素原子のあとなので
+	}
+	elsif($option2 == 9){
+		if(($option1 == 1) && ($#hydrogen_lines != -1)){
+			foreach(@hydrogen_lines){
+				push(@results, "$before_distance\t$_");
+			}
+			@hydrogen_lines = ();
+		}
+		push(@results, "$distances[$#distances]\t$line_num\t$line\t$atom_name");	# "距離\t行数\t残基名"
+		$before_distance = $distances[$#distances];	# 水素原子は酸素原子のあとなので
+	}
+	else{
+		print " ERROR: Subroutine error: discalc - option2\n";
+		exit;
+	}
+	@distances = ();
 }
 
-# --------------- nearest --------------- #
+if($#hydrogen_lines != -1){	# 後処理
+	foreach(@hydrogen_lines){
+		push(@results, "$before_distance\t$_");
+	}
+}
+
+my $result = join("\n", @results);
+return $result;
+}
+
+# =============== create =============== #
+## リストを元にPDBを作成する
+sub create{
+my $pro = shift(@_);	# タンパク質のデータ
+my $wat = shift(@_);	# 水分子のデータ
+my $out = shift(@_);	# 出力するPDBファイル（出力）
+my @lists = @_;			# 残す水分子リスト(行数-1)
+
+my @out = &return_array($pro);
+undef $pro;
+
+my @wats = &return_array($wat);
+undef $wat;
+
+my $wat_count = 0;
+my $now_wat = shift(@lists);
+if($#lists != -1){		# 水分子が存在するときのみ実行
+	foreach(@wats){
+		if($wat_count == $now_wat){	# リストと一致した場合
+			my ($line_num, $residue) = split(/\t/, $_, 2);	# 行数を除去するため分解
+			push(@out, $residue);
+			$now_wat = shift(@lists);	# 一致対象を更新
+		}
+		$wat_count ++;
+	}
+}
+
+my $beforedata = "";
+my @new_out = ();
+foreach(@out){	# 重複するデータがないようにする
+	if($beforedata ne $_){
+		push(@new_out, $_);
+		$beforedata = $_;
+	}
+}
+push(@new_out, "END\n");
+@out = @new_out;
+undef @new_out;
+
+my $file = join("\n", @out);
+open(OUT, "> $out");
+print OUT $file;
+close(OUT);
+}
+
+# =============== search =============== #
+## 距離を計算．タンパク質からの距離を表示．
+sub measure{
+my @datas = @_;			# データ
+
+foreach(@datas){
+	my @lines = split(/\t+/, $_);
+	$lines[0] = &nearest($lines[0], 2);
+	$lines[0] = &adjust(10, $lines[0]);
+	print "$lines[0]\t$lines[2] $lines[3]\n";
+}
+}
+
+# =============== nearest =============== #
 # 四捨五入
 sub nearest{
 my $data = shift(@_);	# 値
@@ -490,21 +562,193 @@ $line = $space . $line;		# スペース追加
 return($line);
 }
 
-# --------------- help --------------- #
+# =============== check_file =============== #
+# ファイルチェック
+sub check_file{
+my $file = shift(@_);
+
+if(! -f $file){
+	print " ERROR: No such file: $file\n";
+	exit;
+}
+
+return $file;
+}
+
+# =============== check_float =============== #
+# 浮動小数チェック
+sub check_float{
+my $value = shift(@_);
+
+if($value !~ /^-?\d+(\.\d+)?$/){
+	print " ERROR: Invalid argument: $value\n";
+	exit;
+}
+
+return $value;
+}
+
+# =============== check_int =============== #
+# 整数チェック
+sub check_int{
+my $value = shift(@_);
+
+if($value !~ /^-?\d+$/){
+	print " ERROR: Invalid argument: $value\n";
+	exit;
+}
+
+return $value;
+}
+
+# =============== check_option =============== #
+# オプションをチェック
+sub check_option{
+my $value = shift(@_);
+
+if($value != 0){
+	print " ERROR: Option is conflict\n";
+	exit;
+}
+
+return $value;
+}
+
+# =============== thread_separator =============== #
+# スレッド用データ生成
+ sub thread_separator{
+my $thread = shift(@_);	# 生成するデータ数
+my $line_max = shift(@_);	# ファイルの行数(分割後)
+my $data = shift(@_);	# 元データ
+
+my @datas = &return_array($data);
+
+my @results = ();
+my @result_tmps = ();
+my $line_num = 1;
+my $count = 1;
+my $before_atom = "";
+foreach(@datas){
+	my $line = $_;
+	my @lines = split(/\t/, $line, 2);	# 行を分割
+	my $now_atom = substr($lines[1], 12, 2);	# 原子名取得
+	$now_atom =~ s/^\d//;
+	$now_atom =~ s/\s+//g;
+	push(@result_tmps, $line);
+	if(($line_max <= $line_num) && ($count < $thread) && (($now_atom eq "H") && ($before_atom eq "H"))){	# ファイルが指定行数を超え，次のファイルが存在する場合(さらに水分子が分裂しないように原子名で延期)
+		my $result = join("\n", @result_tmps);
+		push(@results, $result);
+		@result_tmps = ();
+		$line_num = 0;
+		$count ++;
+	}
+	$before_atom = $now_atom;
+	$line_num ++;
+}
+my $result = join("\n", @result_tmps);
+push(@results, $result);
+return @results;
+}
+
+# =============== return_array =============== #
+# 文字列を配列に戻す
+sub return_array{
+my $str = shift(@_);
+
+my @array = split(/\n/, $str);
+
+return @array;
+}
+
+# =============== determine_main =============== #
+# 残基データから代表値を決定
+sub determine_main{
+my @datas = @_;
+
+my @distances = ();
+my @line_nums = ();
+my @results = ();
+my $before = "";
+foreach(@datas){
+	my @lines = split(/\t+/, $_);	# "距離\t行数\t残基情報"
+	if($before ne $lines[2]){
+		if($before ne ""){
+			@distances = sort {$a <=> $b} @distances;
+			my $line_num = join(",", @line_nums);
+			$line_num =~ s/\s+//g;
+			push(@results, "$distances[0]\t$line_num");	# "距離\t行数"
+		}
+		$before = $lines[2];
+		@distances = ();
+		@line_nums = ();
+	}
+	push(@distances, $lines[0]);
+	push(@line_nums, $lines[1]);
+}
+
+if($#distances != -1){
+	@distances = sort {$a <=> $b} @distances;
+	my $line_num = join(",", @line_nums);
+	$line_num =~ s/\s+//g;
+	push(@results, "$distances[0]\t$line_num");	# "距離\t行数"
+}
+
+return @results;
+}
+
+# =============== range =============== #
+sub range{
+my $numarray = shift(@_);		# 削除原子群情報
+
+my @numarray1 = split(/,/, $numarray);
+my @numarray2 = ();		# 範囲指定情報も含めた最終的情報を格納する
+my $count = 0;				# numarray2の配列番号
+foreach(@numarray1){
+	if(/-/){	# x-y等の範囲指定を認識
+		my @wide = split(/-/, $_);	# 開始と終了に分ける
+		if($wide[0] =~ /^$/){	# 開始がない場合
+			$wide[0] = 1;
+		}
+		elsif($wide[1] =~ /^$/){	# 終了がない場合
+			$numarray2[$count++] = $wide[0];
+			$numarray2[$count++] = -1;
+			last;
+		}
+		my $i = 0;
+		for($i = $wide[0]; $i <= $wide[1]; $i++){	# 範囲をすべて数字にする
+			$numarray2[$count++] = $i;
+		}
+	}
+	else{
+		$numarray2[$count++] = $_;
+	}
+}
+return(@numarray2);
+}
+
+# =============== help =============== #
 sub help{
+my $script_name = basename($0);
 print << "HELP";
- 水分子調整プログラム
-  *VIEWモード
-   \$ wtune -V PDBファイル
+ Program of controlling water molecule
 
-  *数調整モード
-   \$ wtune -N 残す水分子数 入力ファイル 出力ファイル
-
-  *距離調整モード
-   \$ wtune -D 残す水分子の距離範囲 入力ファイル 出力ファイル
-
-  *距離測定モード(タンパク質からの距離を測定)
-   \$ wtune -S (s/S/l/L) PDBファイル
+  \$ $script_name OPTIONS [SUB_OPTION] INPUT [OUTPUT]
+  
+  OPTIONS
+   -V, --view      Show the number of water molecules and all atoms
+   -N, --number    Control the number of water molecule (Need the number)
+   -D, --distance  Control the distance of water molecule (Need the distance)
+   -M, --measure   Measurement distance between solute and water molecule
+                   (Need sub-option)
+       s, short    Calculate shortest distance (in general)
+       l, long     Calculate longest distance
+   -T, --thread    Calculate in parallel (Need the number of thread)
+   -Y, --hydrogen  Also calculate hydrogen (Default: Oxygen only)
+   -P, --part      Target as specified area (Need sub-option and range)
+       L:<RANGE>   Specify as line number
+       AN:<RANGE>  Specify as atom order
+       RN:<RANGE>  Specify as residue number
+   -H, --help      Show help
 
 HELP
 }
