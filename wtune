@@ -1,0 +1,510 @@
+#! /usr/bin/env perl
+
+###########################################################################
+##
+##  水分子調整プログラム					Last Update 2012/01/31
+##   *VIEWモード
+##     $ wtune -V PDBファイル
+##   *数調整モード
+##    $ wtune -N 残す水分子数 入力ファイル 出力ファイル
+##	 *距離調整モード
+##	  $ wtune -D 残す水分子の距離範囲 入力ファイル 出力ファイル
+##	 *距離測定モード(タンパク質からの距離を測定)
+##	  $ wtune -S (s/S/l/L) PDBファイル
+##
+###########################################################################
+
+use strict;
+use File::Temp;
+
+my $option = shift(@ARGV);
+my $num = shift(@ARGV);
+my $in = shift(@ARGV);
+my $out = shift(@ARGV);
+
+if(($option =~ /^--help$/i) || ($option =~ /^-H$/i)){
+	&help;
+}
+elsif(($option =~ /^--view$/i) || ($option =~ /^-V$/i)){
+	if(-f $num){
+		&view($num);
+	}
+	else{
+		print " ERROR: No such file or directory: $in\n";
+	}
+}
+else{
+	if(($option =~ /^-S$/i) || ($option =~ /^--number$/i) || ($option =~ /^-N$/i) || ($option =~ /^--distance$/i) || ($option =~ /^-D$/i)){
+		if(-f $in){
+			my $pro = File::Temp->new(TEMPLATE => '.wtune-1XXXXXX');
+			my $wat = File::Temp->new(TEMPLATE => '.wtune-2XXXXXX');
+			my $tmp = File::Temp->new(TEMPLATE => '.wtune-3XXXXXX');
+			$SIG{'TERM'} = $SIG{'PIPE'} = $SIG{'HUP'} = $SIG{'INT'} = sub {
+				unlink $pro;
+				unlink $wat;
+				unlink $tmp;
+				exit;
+			};	# プログラムが中断した場合の処理
+			&separate($in, $pro, $wat);	#構造を水とタンパク質に分解
+			my @list = ();
+			if(($option =~ /^--distance$/i) || ($option =~ /^-D$/i)){
+				if($num =~ /^\d+(\.\d+)?$/){
+					@list = &discalc($num, $pro, $wat);	#距離で処理
+				}
+				else{
+					print " ERROR: Invalid argument (Only integer or float)";
+					exit;
+				}
+			}
+			elsif(($option =~ /^--number$/i) || ($option =~ /^-N$/i)){
+				if($num =~ /^\d+$/){
+					@list = &mountcalc($num, $pro, $wat);	#分子数で処理
+				}
+				else{
+					print " ERROR: Invalid argument (Only integer)";
+					exit;
+				}
+			}
+			elsif(($option =~ /^--search$/i) || ($option =~ /^-S$/i)){
+				if(($num =~ /^[LS]$/i) || ($num =~ /^short$/i) || ($num =~ /^long$/i)){
+					if(($num =~ /^l$/) || ($num =~ /^long$/)){
+						$num = 1;
+					}
+					elsif(($num =~ /^L$/) || ($num =~ /^LONG$/)){
+						$num = 2;
+					}
+					elsif(($num =~ /^s$/) || ($num =~ /^short$/)){
+						$num = 3;
+					}
+					elsif(($num =~ /^S$/) || ($num =~ /^SHORT$/)){
+						$num = 4;
+					}
+					else{
+						print " ERROR: サブオプションの大文字，小文字が曖昧です．(short/SHORT/long/LONG)\n";
+						exit;
+					}
+					@list = &search($num, $pro, $wat);
+				}
+				else{
+					print " ERROR: サブオプションが指定されていません．(s/S/l/L)\n";
+				}
+				exit;
+			}
+			&create($pro, $wat, $tmp, @list);
+			
+			if($out =~ /^$/){	#出力先が指定されていない場合
+				print " INFORMATION: 出力先が指定されていません．\n";
+				print " INFORMATION: 上書き(O)，別名で保存(S)，何もしない(C)\n > ";
+				my $user = <STDIN>;
+				$user =~ s/\n//;
+				if($user =~ /^O$/i){
+					unlink $in;
+					rename $tmp, $in;
+				}
+				elsif($user =~ /^S$/i){
+					print " ファイル名: ";
+					$user = <STDIN>;
+					$user =~ s/\n//;
+					rename $tmp, $user;
+				}
+				else{
+					exit;
+				}
+			}
+			else{
+				rename $tmp, $out;
+			}
+		}
+		else{
+			print " ERROR: 指定された入力ファイルは存在しません．\n";
+		}
+	}
+	else{
+		print " ERROR: 未定義のオプションです．\n";
+	}
+}
+exit;
+
+# --------------- view --------------- #
+##PDBのステータス表示
+sub view{
+my $in = $_[0];
+
+my $water = 0;
+my $atom = 0;
+my $wateratom = 0;
+open(IN, "$in");
+while(<IN>){
+	if((/^atom/i) || (/^hetatm/i)){
+		$atom++;	#総原子数
+		my $line1 = substr($_, 11, 9);
+		my $line2 = substr($_, 17, 3);
+		if(($line2 =~ /HOH/) || ($line2 =~ /WAT/) || ($line2 =~ /SOL/)){	#水原子数
+			$wateratom++;
+		}
+		if(($line1 =~ /\s+O\s+HOH/) || ($line1 =~ /\s+O\s+WAT/) || ($line1 =~ /\s+OW\s+SOL/)){	#水分子数
+			$water++;
+		}
+	}
+}
+close(IN);
+$wateratom = $atom - $wateratom;	#他の原子数算出
+print " $in\n";
+print "  水分子数: $water\n";
+print "  他の原子: $wateratom\n";
+print "  総原子数: $atom\n";
+}
+
+# --------------- separate --------------- #
+##水とタンパク質に分割
+sub separate{
+my $in = shift(@_);	#元PDB
+my $pro = shift(@_);	#水以外の分子のPDB（出力）
+my $wat = shift(@_);	#水分子のPDB（出力）
+
+my $beforeline = "";
+open(IN, "$in");
+open(PRO, "> $pro");
+open(WAT, "> $wat");
+while(<IN>){
+	if((/^HETATM/i) || (/^ATOM/i)){
+		my $data = substr($_, 17, 3);
+		if(($data =~ /^HOH$/i) || ($data =~ /^WAT$/) || ($data =~ /^SOL$/)){	#水分子
+			print WAT;
+		}
+		else{	#その他の分子
+			print PRO;
+		}
+	}
+	elsif(/^TER/){	#TERはPROに記述
+		if($beforeline ne $_){	#TERが連続しないようにする
+			print PRO "TER\n";
+			$beforeline = $_;
+		}
+	}
+}
+close(IN);
+close(WAT);
+close(PRO);
+}
+
+# --------------- discalc --------------- #
+##距離を計算し，距離で残すか判断．-> 残す水構成分子をファイルとして出力
+sub discalc{
+my $adistance = shift(@_);	#指定された距離
+my $pro = shift(@_);		#水以外の分子のPDB（入力）
+my $wat = shift(@_);		#水分子のPDB（入力）
+
+my @aminox = ();	#水以外の分子のx座標
+my @aminoy = ();	#水以外の分子のy座標
+my @aminoz = ();	#水以外の分子のz座標
+open(PRO, "$pro");
+while(<PRO>){
+	if((/^ATOM/i) || (/^HETATM/i)){
+		s/\n//;
+		my $prox = substr($_, 30, 8);
+		my $proy = substr($_, 38, 8);
+		my $proz = substr($_, 46, 8);
+		push(@aminox, $prox);	#その他の原子x座標取得
+		push(@aminoy, $proy);	#その他の原子y座標取得
+		push(@aminoz, $proz);	#その他の原子z座標取得
+	}
+}
+close(PRO);
+
+my @list1 = ();		#残す分子リスト
+open(WAT, "$wat");
+while(<WAT>){
+	my $line = $_;
+	s/\n//;
+	my $watx = substr($line, 30, 8);
+	my $waty = substr($line, 38, 8);
+	my $watz = substr($line, 46, 8);
+	my $count = 0;				#座標配列のためのカウンタ
+	foreach(@aminox){
+		my $ax = $_;					#水以外の分子のx座標
+		my $ay = $aminoy[$count];		#水以外の分子のy座標
+		my $az = $aminoz[$count];		#水以外の分子のz座標
+		my $calcdis = sqrt(($watx - $ax) ** 2 + ($waty - $ay) ** 2 + ($watz - $az) ** 2);	#距離の演算
+		if($calcdis <= $adistance){	#範囲内であるか
+			$line = substr($line, 17, 9);	#残基データ取得
+			push(@list1, $line);
+			last;
+		}
+		$count ++;
+	}
+}
+close(WAT);
+
+my @list1 = sort(@list1);	#残基データのソート
+my @list2 = ();
+my $beforedata = "";	#前の残基データ
+foreach(@list1){	#残基名が重複していたらスキップして，最終的に重複しないようにする
+	if($beforedata ne $_){
+		push(@list2, $_);
+		$beforedata = $_;
+	}
+}
+return @list2;
+}
+
+# --------------- mountcalc --------------- #
+##距離を計算し，距離+個数で残すか判断．-> 残す水構成分子をファイルとして出力
+sub mountcalc{
+my $mount = shift(@_);	#指定された水分子
+my $pro = shift(@_);		#水以外の分子のPDB（入力）
+my $wat = shift(@_);		#水分子のPDB（入力）
+
+my @aminox = ();	#水以外の分子のx座標
+my @aminoy = ();	#水以外の分子のy座標
+my @aminoz = ();	#水以外の分子のz座標
+open(PRO, "$pro");
+while(<PRO>){	#タンパク質構造ファイル
+	if((/^HETATM/i) || (/^ATOM/i)){
+		s/\n//;
+		my $prox = substr($_, 30, 8);
+		my $proy = substr($_, 38, 8);
+		my $proz = substr($_, 46, 8);
+		push(@aminox, $prox);	#その他の原子x座標取得
+		push(@aminoy, $proy);	#その他の原子y座標取得
+		push(@aminoz, $proz);	#その他の原子z座標取得
+	}
+}
+close(PRO);
+
+my %alldistance = ();	#計算した順番と最終距離データを格納する
+my %allresidue = ();	#計算した順番と残基データを格納する
+my $datanum = 0;	#計算した順番
+open(WAT, "$wat");
+while(<WAT>){	#水分子の構造ファイル
+	my $line = $_;
+	s/\n//;
+	my $watx = substr($line, 30, 8);
+	my $waty = substr($line, 38, 8);
+	my $watz = substr($line, 46, 8);
+	my $count = 0;	#配列番号
+	my @distance = ();	#演算した距離を格納
+	foreach(@aminox){
+		my $ax = $_;					#水以外の分子のx座標
+		my $ay = $aminoy[$count];		#水以外の分子のy座標
+		my $az = $aminoz[$count];		#水以外の分子のz座標
+		my $calcdis = sqrt(($watx - $ax) ** 2 + ($waty - $ay) ** 2 + ($watz - $az) ** 2);	#距離の演算
+		push(@distance, $calcdis);		#距離をdistanceに格納
+		$count ++;
+	}
+	@distance = sort {$a <=> $b} (@distance);	#距離をソートし，最短距離を配列先頭へ
+	$line = substr($line, 17, 9);	#現在の残基データを取得
+	$allresidue{$datanum} = $line;	#計算番号と残基データ
+	$alldistance{$datanum} = $distance[0];	#計算番号と距離(上のハッシュとは計算番号で同期)
+	$datanum ++;
+}
+close(WAT);
+
+my @list1 = ();
+foreach my $residuenum (sort{$alldistance{$a} <=> $alldistance{$b}} keys %alldistance){	#ハッシュを距離でソートし，残基データをリストへ
+	my $flag = 0;	#既に登録されている残基データと重複しないようにするフラグ(このプログラムは水分子の一部がタンパク質に最も近い部分を水分子の座標と認識する)
+	foreach(@list1){
+		if($_ eq $allresidue{$residuenum}){	#既に登録済み
+			$flag = 1;
+		}
+	}
+	if($flag == 0){	#登録されていない場合，登録する
+		push(@list1, $allresidue{$residuenum});
+	}
+}
+
+my @list2 = ();	#最終的なリスト
+for(my $count = 0; $count < $mount; $count++){	#指定した数に調整する
+	push(@list2, $list1[$count]);
+}
+@list2 = sort(@list2);	#ここで，リストをソートする
+return @list2;
+}
+
+# --------------- create --------------- #
+##リストを元にPDBを作成する
+sub create{
+my $pro = shift(@_);	#元のPDBファイル（入力）
+my $wat = shift(@_);	#水分子ファイル（出力・入力）
+my $out = shift(@_);	#出力するPDBファイル（出力）
+my @list = @_;	#残す水分子残基データ
+
+my $tmp = File::Temp->new(TEMPLATE => '.wtune-cXXXXXX');
+open(OUT, "> $tmp");
+open(IN, "$pro");
+while(<IN>){
+	print OUT;
+}
+close(IN);
+
+my $beforedata = "";
+open(IN, "$wat");
+while(<IN>){
+	my $line = $_;
+	my $data = substr($_, 17, 9);	#残基データ取得
+	foreach(@list){
+		if($_ eq $data){	#残基データと残す水分子残基データが一致したら，出力する．
+			if($data ne $beforedata){
+				print OUT "TER\n";
+				$beforedata = $data;
+			}
+			print OUT $line;
+			last;
+		}
+	}
+}
+close(IN);
+close(OUT);
+
+open(IN, "$tmp");
+open(OUT, "> $out");
+$beforedata = "";
+while(<IN>){	#重複するデータがないようにする
+	if($beforedata ne $_){
+		print OUT;
+		$beforedata = $_;
+	}
+}
+print OUT "END\n";
+close(IN);
+close(OUT);
+unlink $tmp;
+}
+
+# --------------- search --------------- #
+## 距離を計算．タンパク質からの最短距離を表示．
+sub search{
+my $mode = shift(@_);
+my $pro = shift(@_);		#水以外の分子のPDB（入力）
+my $wat = shift(@_);		#水分子のPDB（入力）
+
+my @aminox = ();	#水以外の分子のx座標
+my @aminoy = ();	#水以外の分子のy座標
+my @aminoz = ();	#水以外の分子のz座標
+open(PRO, "$pro");
+while(<PRO>){
+	if((/^ATOM/i) || (/^HETATM/i)){
+		s/\n//;
+		my $prox = substr($_, 30, 8);
+		my $proy = substr($_, 38, 8);
+		my $proz = substr($_, 46, 8);
+		push(@aminox, $prox);	#その他の原子x座標取得
+		push(@aminoy, $proy);	#その他の原子y座標取得
+		push(@aminoz, $proz);	#その他の原子z座標取得
+	}
+}
+close(PRO);
+
+open(WAT, "$wat");
+while(<WAT>){
+	my $line = $_;
+	$line =~ s/\n//;
+	my $atom = substr($line, 13, 1);	# 原子名取得
+	if(($atom eq "H") && (($mode == 1) || ($mode == 3))){	# 小文字モードの時は H を省略
+		next;
+	}
+	my $watx = substr($line, 30, 8);
+	my $waty = substr($line, 38, 8);
+	my $watz = substr($line, 46, 8);
+	my $count = 0;				#座標配列のためのカウンタ
+	$line = substr($line, 17, 9);	#残基データ取得
+	my $memdistance = 0;
+	if($mode <= 2){		# タンパク質原子からの最長距離
+		$memdistance = 0;
+	}
+	else{
+		$memdistance = 9999;	# タンパク質原子からの最短距離(タンパク質表面からの距離)
+	}
+	foreach(@aminox){
+		my $ax = $_;					#水以外の分子のx座標
+		my $ay = $aminoy[$count];		#水以外の分子のy座標
+		my $az = $aminoz[$count];		#水以外の分子のz座標
+		my $calcdis = sqrt(($watx - $ax) ** 2 + ($waty - $ay) ** 2 + ($watz - $az) ** 2);	#距離の演算
+		if(($mode <= 2) && ($memdistance < $calcdis)){		# タンパク質原子からの最長距離
+			$memdistance = $calcdis;
+		}
+		elsif(($mode >= 3) && ($memdistance > $calcdis)){	# タンパク質原子からの最短距離(タンパク質表面からの距離)
+			$memdistance = $calcdis;
+		}
+		$count ++;
+	}
+	$memdistance = &nearest($memdistance, 2);
+	$memdistance = &adjust(10, $memdistance);
+	print "$memdistance\t$line $atom\n";
+}
+close(WAT);
+}
+
+# --------------- nearest --------------- #
+# 四捨五入
+sub nearest{
+my $data = shift(@_);	# 値
+my $round = shift(@_);	# 小数点以下の桁数
+
+if($round > 0){	# 桁数が設定されている場合
+	$data = $data * 10 ** $round;	# 出力すべき値を整数部にする．そして小数点以下切り捨て．
+	if($data > 0){	# 繰り上げ・繰り下げの判定(正負の値により変わる)
+		$data += 0.5;
+	}
+	else{
+		$data -= 0.5;
+	}
+	if($data !~ /^-?\d+\.\d+$/){
+		$data = $data . ".0";
+	}
+	$data = int($data);	# 小数点以下切り捨て
+	$data = $data / (10 ** $round);	# 桁を元に戻す
+	if($data !~ /\.\d+/){	# 結果が整数のみ(小数点がない場合)の場合
+		my $zero = "";
+		for(my $i = 1; $i <= $round; $i ++){	# 小数点以下に付く 0 を用意する
+			$zero = "0$zero";
+		}
+		$data = "$data.$zero";	# 結果に 0 を付加する
+	}
+	else{	# 小数点はあるもの(最後の桁が0で切り捨てられている場合がある)
+		my $length = $&;	# 小数点以下のデータを取得
+		$length = length($length) - 1;	# 小数点以下何桁あるか調べる
+		if($length != $round){	# 指定した桁数ない場合
+			my $addzero = $round - $length;
+			my $zero = "";
+			for(my $i = 1; $i <= $addzero; $i ++){	# 小数点以下に付く 0 を用意する
+				$zero = "0$zero";
+			}
+			$data = "$data$zero";	# 結果に 0 を付加する
+		}
+	}
+}
+
+return $data;
+}
+
+# =============== adjust =============== #
+sub adjust{
+my $max = shift(@_);	# 調整後文字数
+my $line = shift(@_);	# 文字列
+
+my $space = length($line);	# 文字列の長さ
+$space = $max - $space;		# 追加するスペース数
+$space = " " x $space;			# スペース
+$line = $space . $line;		# スペース追加
+return($line);
+}
+
+# --------------- help --------------- #
+sub help{
+print << "HELP";
+ 水分子調整プログラム
+  *VIEWモード
+   \$ wtune -V PDBファイル
+
+  *数調整モード
+   \$ wtune -N 残す水分子数 入力ファイル 出力ファイル
+
+  *距離調整モード
+   \$ wtune -D 残す水分子の距離範囲 入力ファイル 出力ファイル
+
+  *距離測定モード(タンパク質からの距離を測定)
+   \$ wtune -S (s/S/l/L) PDBファイル
+
+HELP
+}
