@@ -21,12 +21,11 @@ def check_file(file):
 
 # 溶質からの最短距離算出
 def calc_sdistance(index):
-	write = []
+	results = []
 	flag_break = 0
+	saved_distance = -1
 	for j in range(len(w_coords[index])):
 		# 水分子構成原子の数だけループ
-		saved_distance = -1
-
 		if args.flag_hydrogen == False:
 			# flag_hydrogen が OFF の場合、1回で終了させる
 			flag_break = 1
@@ -38,20 +37,21 @@ def calc_sdistance(index):
 				# 初回か、これまでの距離より短い場合
 				saved_distance = distance
 
-		# 最短ルートの処理
-		if 0 < saved_distance <= args.distance:
-			flag_break = 1
-			for k in range(len(w_infos[index])):
-				write.append(w_infos[index][k])
-			write.append("TER\n")
-
 		if flag_break == 1:
 			break
 
-	if len(write) == 0:
-		return ""
+	# 最短ルートの処理
+	if 0 < saved_distance:
+		results.append(saved_distance)
+		results.append(index)
+		for k in range(len(w_infos[index])):
+			results.append(w_infos[index][k])
+		results.append("TER\n")
 	else:
-		return write
+		sys.stderr.write("ERROR: function (calc_sdistance) error\n")
+		sys.exit(1)
+
+	return results
 
 
 
@@ -151,10 +151,19 @@ if __name__ == '__main__':
 
 			# 最短距離の算出
 			datas = joblib.Parallel(n_jobs = args.thread, verbose = 10)([joblib.delayed(calc_sdistance)(i) for i in range(len(w_coords))])
-			for data in datas:
-				if data == None:
-					pass
-				else:
-					for line in data:
-						fobj_output.write(line)
+
+			if args.distance != None:
+				for data in datas:
+					if data[0] <= args.distance:
+						for i in range(2, len(data)):
+							fobj_output.write(data[i])
+
+			else:
+				datas = sorted(datas, key = lambda x:x[0])
+				datas = datas[0:args.number]
+				datas = sorted(datas, key = lambda x:x[1])
+				for data in datas:
+					for i in range(2, len(data)):
+						fobj_output.write(data[i])
+
 			fobj_output.write("END\n")
