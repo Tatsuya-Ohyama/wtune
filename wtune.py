@@ -9,8 +9,7 @@ import argparse
 import sys
 import os
 import re
-import tqdm
-
+import joblib
 
 # =============== functions =============== #
 # ファイルの確認
@@ -18,6 +17,41 @@ def check_file(file):
 	if not os.path.exists(file):
 		sys.stderr.write("ERROR: No such file (%s)\n" % file)
 		sys.exit(1)
+
+
+def calc_sdistance(index):
+	write = []
+	flag_break = 0
+	for j in range(len(w_coords[index])):
+		# 水分子構成原子の数だけループ
+		saved_distance = -1
+
+		if args.flag_hydrogen == False:
+			# flag_hydrogen が1回で終了させる
+			flag_break = 1
+
+		for k in range(len(s_coords)):
+			# 溶質構成原子の数だけループ
+			distance = ((w_coords[index][j][0] - s_coords[k][0]) ** 2 + (w_coords[index][j][1] - s_coords[k][1]) ** 2 + (w_coords[index][j][2] - s_coords[k][2]) ** 2) ** 0.5
+			if saved_distance == -1 or distance < saved_distance:
+				# 初回か、これまでの距離より短い場合
+				saved_distance = distance
+
+		# 最短ルートの処理
+		if 0 < saved_distance <= args.distance:
+			flag_break = 1
+			for k in range(len(w_infos[index])):
+				write.append(w_infos[index][k])
+			write.append("TER\n")
+
+		if flag_break == 1:
+			break
+
+	if len(write) == 0:
+		return ""
+	else:
+		return write
+
 
 
 # =============== main =============== #
@@ -64,7 +98,6 @@ if __name__ == '__main__':
 			print(" Water molecules: %5d" % w_count)
 			print(" Other residues : %5d" % r_count)
 			print(" All atoms      : %5d" % a_count)
-
 
 	else:
 		s_coords = []
@@ -116,36 +149,11 @@ if __name__ == '__main__':
 
 
 			# 最短距離の算出
-			for i in tqdm.tqdm(range(len(w_coords))):
-				# 水分子の数だけループ
-				flag_break = 0
-
-				for j in range(len(w_coords[i])):
-					# 水分子構成原子の数だけループ
-					saved_distance = -1
-
-					if args.flag_hydrogen == False:
-						# flag_hydrogen が1回で終了させる
-						flag_break = 1
-
-					for k in range(len(s_coords)):
-						# 溶質構成原子の数だけループ
-						distance = ((w_coords[i][j][0] - s_coords[k][0]) ** 2 + (w_coords[i][j][1] - s_coords[k][1]) ** 2 + (w_coords[i][j][2] - s_coords[k][2]) ** 2) ** 0.5
-						if saved_distance == -1 or distance < saved_distance:
-							# 初回か、これまでの距離より短い場合
-							saved_distance = distance
-
-					# 最短ルートの処理
-					if 0 < saved_distance <= args.distance:
-						flag_break = 1
-						for k in range(len(w_infos[i])):
-							fobj_output.write(w_infos[i][k])
-						fobj_output.write("TER\n")
-
-					if flag_break == 1:
-						break
-
+			datas = joblib.Parallel(n_jobs = args.thread, verbose = 10)([joblib.delayed(calc_sdistance)(i) for i in range(len(w_coords))])
+			for data in datas:
+				if data == None:
+					pass
+				else:
+					for line in data:
+						fobj_output.write(line)
 			fobj_output.write("END\n")
-
-
-
