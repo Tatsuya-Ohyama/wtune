@@ -19,6 +19,7 @@ def check_file(file):
 		sys.exit(1)
 
 
+# 溶質からの最短距離算出
 def calc_sdistance(index):
 	write = []
 	flag_break = 0
@@ -27,7 +28,7 @@ def calc_sdistance(index):
 		saved_distance = -1
 
 		if args.flag_hydrogen == False:
-			# flag_hydrogen が1回で終了させる
+			# flag_hydrogen が OFF の場合、1回で終了させる
 			flag_break = 1
 
 		for k in range(len(s_coords)):
@@ -94,7 +95,7 @@ if __name__ == '__main__':
 						if line[17:20] == "WAT" or line[17:20] == "HOH" or line[17:20] == "SOL":
 							w_count += 1
 
-			print(" %s" % args.input)
+			print(" Input file     : %s" % args.input)
 			print(" Water molecules: %5d" % w_count)
 			print(" Other residues : %5d" % r_count)
 			print(" All atoms      : %5d" % a_count)
