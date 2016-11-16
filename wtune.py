@@ -120,7 +120,8 @@ if __name__ == '__main__':
 		w_coords = []
 		w_infos = []
 
-		check_overwrite(args.output)
+		if args.flag_overwrite == False:
+			check_overwrite(args.output)
 
 		re_number = r"[\d\s]"
 		tempfile_name = ""
