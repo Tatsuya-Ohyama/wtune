@@ -5,11 +5,12 @@
 	水分子調整プログラム
 """
 
+import sys, os, re, signal
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+
 import argparse
-import sys
-import os
-import re
 import joblib
+import tempfile, shutil
 
 # =============== functions =============== #
 # ファイルの確認
@@ -17,6 +18,16 @@ def check_file(file):
 	if not os.path.exists(file):
 		sys.stderr.write("ERROR: No such file (%s)\n" % file)
 		sys.exit(1)
+
+
+# check_overwrite (上書き確認)
+def check_overwrite(file):
+	if os.path.exists(file):
+		sys.stderr.write("WARN: %s exists. Overwrite it? (y/N): " % file)
+		sys.stderr.flush()
+		user = sys.stdin.readline().replace("\n", "")
+		if not user == "y": #or not user == "Y":
+			sys.exit(0)
 
 
 # 溶質からの最短距離算出
@@ -59,13 +70,15 @@ def calc_sdistance(index):
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
 
-	parser.add_argument("-d", "--distance", help = "specify the distance from solute", metavar = "DISTANCE", type = float)
-	parser.add_argument("-n", "--number", help = "specify the number of water molecules", metavar = "NUMBER", type = int)
-	parser.add_argument("-t", "--thread", help = "the number of thread for calculations", metavar = "THREAD", type = int)
-	parser.add_argument("-i", "--input", help = "pdb file (input)")
-	parser.add_argument("-o", "--output", help = "pdb file (output)")
-	parser.add_argument("-V", "--view", help = "display the number of water molecules and all atom", action = "store_true")
-	parser.add_argument("-Y", "--hydrogen", help = "calculate", action = "store_true", dest = "flag_hydrogen")
+	group = parser.add_mutually_exclusive_group(required = True)
+	group.add_argument("-d", "--distance", dest = "distance", metavar = "DISTANCE", type = float, help = "specify the distance from solute")
+	group.add_argument("-n", "--number", dest = "number", metavar = "NUMBER", type = int, help = "specify the number of water molecules")
+	parser.add_argument("-t", "--thread", dest = "thread", metavar = "THREAD", type = int, default = 1, help = "the number of thread for calculations (Default: 1)")
+	parser.add_argument("-i", "--input", dest = "input", required = True, help = "pdb file (input)")
+	parser.add_argument("-o", "--output", dest = "output", required = True, help = "pdb file (output)")
+	parser.add_argument("-V", "--view", dest = "view", action = "store_true", help = "display the number of water molecules and all atom")
+	parser.add_argument("-O", dest = "flag_overwrite", action = "store_true", default = False, help = "overwrite forcibly (Default: False)")
+	parser.add_argument("-Y", "--hydrogen", dest = "flag_hydrogen", action = "store_true", help = "calculate distance between solute and water molecules with hydrogen atoms (Default: False)")
 
 	args = parser.parse_args()
 
@@ -78,6 +91,7 @@ if __name__ == '__main__':
 	re_record_atom = re.compile(r"^((ATOM)|(HETATM))")
 
 	if args.view == True:
+		# 内容表示
 		with open(args.input, "r") as f_obj:
 			w_count = 0
 			r_count = 0
@@ -101,13 +115,18 @@ if __name__ == '__main__':
 			print(" All atoms      : %5d" % a_count)
 
 	else:
+		# 水分子切り出し
 		s_coords = []
 		w_coords = []
 		w_infos = []
 
+		check_overwrite(args.output)
+
 		re_number = r"[\d\s]"
-		with open(args.output, "w") as fobj_output:
-			with open(args.input, "r") as fobj_input:
+		tempfile_name = ""
+		with tempfile.NamedTemporaryFile(mode = "w", prefix = ".wtune_", delete = False) as obj_output:
+			tempfile_name = obj_output.name
+			with open(args.input, "r") as obj_input:
 				# 溶質と水分子に分割 (溶質とその他はファイルに書き込み)
 
 				residue = ""
@@ -117,7 +136,7 @@ if __name__ == '__main__':
 				re_wat = r"^((WAT)|(SOL)|(HOH))"
 				re_end = r"^END"
 
-				for line in fobj_input:
+				for line in obj_input:
 					# ファイル読み込み
 
 					if re.search(re_record_atom, line):
@@ -138,14 +157,14 @@ if __name__ == '__main__':
 						else:
 							# 溶質の行
 							s_coords.append([float(line[30:38]), float(line[38:46]), float(line[46:54])])
-							fobj_output.write(line)
+							obj_output.write(line)
 							w_log = line
 
 					else:
 						# その他のレコード
 						if not (re.search(re_ter, w_log) and re.search(re_ter, line)) and not re.search(re_end, line):
 							# TER の重複回避とEND回避
-							fobj_output.write(line)
+							obj_output.write(line)
 							w_log = line
 
 
@@ -156,7 +175,7 @@ if __name__ == '__main__':
 				for data in datas:
 					if data[0] <= args.distance:
 						for i in range(2, len(data)):
-							fobj_output.write(data[i])
+							obj_output.write(data[i])
 
 			else:
 				datas = sorted(datas, key = lambda x:x[0])
@@ -164,6 +183,8 @@ if __name__ == '__main__':
 				datas = sorted(datas, key = lambda x:x[1])
 				for data in datas:
 					for i in range(2, len(data)):
-						fobj_output.write(data[i])
+						obj_output.write(data[i])
 
-			fobj_output.write("END\n")
+			obj_output.write("END\n")
+
+		shutil.move(tempfile_name, args.output)
