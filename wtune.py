@@ -82,7 +82,7 @@ if __name__ == '__main__':
 
 	args = parser.parse_args()
 
-	if args.distance == None and args.number == None and args.view == False:
+	if args.distance is None and args.number is None and args.view == False:
 		sys.stderr.write("ERROR: distance or number does not specified\n")
 		sys.exit(1)
 
