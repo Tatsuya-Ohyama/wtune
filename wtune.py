@@ -11,7 +11,7 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 import argparse
 import parmed
 import numpy as np
-from py_module_basic import basic
+import basic_func
 
 # =============== main =============== #
 if __name__ == '__main__':
@@ -35,7 +35,7 @@ if __name__ == '__main__':
 		sys.stderr.write("ERROR: distance or number does not specified\n")
 		sys.exit(1)
 
-	basic.check_exist(args.input, 2)
+	basic_func.check_exist(args.input, 2)
 
 	re_record_atom = re.compile(r"^((ATOM)|(HETATM))")
 
@@ -65,7 +65,7 @@ if __name__ == '__main__':
 
 	else:
 		# ファイルの読み込み
-		basic.check_exist(args.input, 2)
+		basic_func.check_exist(args.input, 2)
 		structure = parmed.load_file(args.input)
 		ambermask_solvent = parmed.amber.AmberMask(structure, args.mask)
 		ambermask_solute = parmed.amber.AmberMask(structure, "!" + args.mask)
@@ -94,5 +94,5 @@ if __name__ == '__main__':
 		strip_mask = parmed.amber.AmberMask(structure, "!:" + ",".join([str(x + 1) for x in remain_residue]))
 		structure.strip(strip_mask)
 		if args.flag_overwrite == False:
-			basic.check_overwrite(args.output)
+			basic_func.check_overwrite(args.output)
 		structure.write_pdb(args.output, renumber = True)
