@@ -11,7 +11,28 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 import argparse
 import parmed
 import numpy as np
-import basic_func
+from scipy.spatial import distance
+from basic_func import check_exist, check_overwrite, summarized_range
+from tqdm import tqdm
+
+
+# =============== functions =============== #
+def calc_matrix_distance(coord_solute, coord_solvent):
+	sol = coord_solute.shape[0]
+	solv = coord_solvent.shape[0]
+	al = sol + solv
+
+	matrix_distance = distance.pdist(np.vstack((coord_solute, coord_solvent)))
+
+	target_list = []
+	base = 0
+	for i in range(sol):
+		base += sol - 1 - i
+		target_list.extend(list(range(base, base + solv)))
+		base += solv
+
+	return matrix_distance[np.array(target_list)].reshape(sol, solv)
+
 
 # =============== main =============== #
 if __name__ == '__main__':
@@ -26,7 +47,8 @@ if __name__ == '__main__':
 	group_strip_mode = group_strip.add_mutually_exclusive_group(required = True)
 	group_strip_mode.add_argument("-d", "--distance", dest = "distance", metavar = "DISTANCE", type = float, help = "specify the distance from solute")
 	group_strip_mode.add_argument("-n", "--number", dest = "number", metavar = "NUMBER", type = int, help = "specify the number of water molecules")
-	group_strip.add_argument("-m", "--mask", dest = "mask", default = ":SOL,WAT,HOH", help = "ambermask for solvent molecules")
+	group_strip.add_argument("-ms", "--mask_solute", dest = "mask_solute", help = "ambermask for solvent molecules")
+	group_strip.add_argument("-mv", "--mask_solvent", dest = "mask_solvent", default = ":SOL,WAT,HOH", help = "ambermask for solvent molecules")
 	group_strip.add_argument("-O", dest = "flag_overwrite", action = "store_true", default = False, help = "overwrite forcibly (Default: False)")
 
 	args = parser.parse_args()
@@ -35,7 +57,7 @@ if __name__ == '__main__':
 		sys.stderr.write("ERROR: distance or number does not specified\n")
 		sys.exit(1)
 
-	basic_func.check_exist(args.input, 2)
+	check_exist(args.input, 2)
 
 	re_record_atom = re.compile(r"^((ATOM)|(HETATM))")
 
@@ -65,34 +87,72 @@ if __name__ == '__main__':
 
 	else:
 		# ファイルの読み込み
-		basic_func.check_exist(args.input, 2)
+		check_exist(args.input, 2)
 		structure = parmed.load_file(args.input)
-		ambermask_solvent = parmed.amber.AmberMask(structure, args.mask)
-		ambermask_solute = parmed.amber.AmberMask(structure, "!" + args.mask)
+
+		# マスクの設定
+		ambermask_solvent = parmed.amber.AmberMask(structure, args.mask_solvent)
+		ambermask_solute = None
+		if args.mask_solute is None:
+			# 溶質のマスクが指定されていない場合
+			ambermask_solute = parmed.amber.AmberMask(structure, "!" + args.mask_solvent)
+		else:
+			# 溶質のマスクが指定されている場合
+			ambermask_solute = parmed.amber.AmberMask(structure, args.mask_solute)
+
+		# 残すマスクを作成
+		remain_mask = [structure.atoms[idx].number for idx in ambermask_solute.Selected()]
 
 		# 溶質分子の座標取得
 		coord_solute = np.array([[structure.atoms[idx].xx, structure.atoms[idx].xy, structure.atoms[idx].xz] for idx in ambermask_solute.Selected()])
 
-		# 溶質分子の残基番号取得
-		remain_residue = []
-		for atom_solute_idx in ambermask_solute.Selected():
-			if structure.atoms[atom_solute_idx].residue.idx not in remain_residue:
-				remain_residue.append(structure.atoms[atom_solute_idx].residue.idx)
+		# 溶媒情報取得
+		info_solvent = [[structure.atoms[idx].number, structure.atoms[idx].residue.name, structure.atoms[idx].residue.number, structure.atoms[idx].xx, structure.atoms[idx].xy, structure.atoms[idx].xz] for idx in ambermask_solvent.Selected()]
 
-		for atom_solvent_idx in ambermask_solvent.Selected():
-			# 溶媒分子をチェック
-			if structure.atoms[atom_solvent_idx].residue.idx not in remain_residue:
-				# 溶質分子の座標をリファレンスにする
-				coord_solvent = np.array([structure.atoms[atom_solvent_idx].xx, structure.atoms[atom_solvent_idx].xy, structure.atoms[atom_solvent_idx].xz])
+		flag_first = True
+		residue_info = ""
+		atom_list = []
+		coord_solvent = []
+		remain_list = []	# [[residue_name, residue_number, distance, [atom_number, ...]], ...]
+		for atom_record in tqdm(info_solvent, desc = "Calculate distance", ascii = True):
+			if residue_info != "{0[1]}.{0[2]}".format(atom_record):
+				# 残基名が異なる場合
+				if flag_first == False:
+					# 2 回目移行は距離を計算
+					matrix_distance = calc_matrix_distance(coord_solute, np.array(coord_solvent))
+					remain_list[-1][2] = matrix_distance.min()
+				else:
+					# 最初は登録するだけ
+					flag_first = False
 
-				# 距離行列を作成
-				distance_list = np.sqrt(np.sum((coord_solvent - coord_solute) ** 2, axis = 1))
-				if len(np.where(distance_list <= args.distance)[0]) != 0:
-					# 指定距離内に分子が存在する場合
-					remain_residue.append(structure.atoms[atom_solvent_idx].residue.idx)
+				residue_info = "{0[1]}.{0[2]}".format(atom_record)
+				remain_list.append([atom_record[1], atom_record[2], 0.0, []])
+				atom_list = []
+				coord_solvent = []
+			coord_solvent.append(atom_record[3:])
+			remain_list[-1][3].append(atom_record[0])
 
-		strip_mask = parmed.amber.AmberMask(structure, "!:" + ",".join([str(x + 1) for x in remain_residue]))
-		structure.strip(strip_mask)
-		if args.flag_overwrite == False:
-			basic_func.check_overwrite(args.output)
-		structure.write_pdb(args.output, renumber = True)
+		if len(coord_solvent) != 0:
+			matrix_distance = calc_matrix_distance(coord_solute, np.array(coord_solvent))
+			remain_list[-1][2] = matrix_distance.min()
+
+	if args.distance is not None:
+		# 距離モードの場合
+		for remain_info in remain_list:
+			if remain_info[2] <= args.distance:
+				remain_mask.extend(remain_info[3])
+
+	elif args.number is not None:
+		# 数モードの場合
+		cnt = 0
+		for remain_info in sorted(remain_list, key = lambda x : x[2]):
+			remain_mask.extend(remain_info[3])
+			cnt += 1
+			if args.number < cnt:
+				break
+
+	structure.strip("!@" + summarized_range(remain_mask))
+
+	if args.flag_overwrite == False:
+		check_overwrite(args.output)
+	structure.write_pdb(args.output, renumber = True)
