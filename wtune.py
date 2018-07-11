@@ -16,6 +16,12 @@ from basic_func import check_exist, check_overwrite, summarized_range
 from tqdm import tqdm
 
 
+# =============== variables =============== #
+re_atom = re.compile(r'^(?:(?:HETATM)|(?:ATOM))')
+re_ter = re.compile(r'^TER')
+re_end = re.compile(r'^END')
+
+
 # =============== functions =============== #
 def calc_matrix_distance(coord_solute, coord_solvent):
 	sol = coord_solute.shape[0]
@@ -101,13 +107,13 @@ if __name__ == '__main__':
 			ambermask_solute = parmed.amber.AmberMask(structure, args.mask_solute)
 
 		# 残すマスクを作成
-		remain_mask = [structure.atoms[idx].number for idx in ambermask_solute.Selected()]
+		remain_idx = [structure.atoms[idx].idx for idx in ambermask_solute.Selected()]
 
 		# 溶質分子の座標取得
 		coord_solute = np.array([[structure.atoms[idx].xx, structure.atoms[idx].xy, structure.atoms[idx].xz] for idx in ambermask_solute.Selected()])
 
 		# 溶媒情報取得
-		info_solvent = [[structure.atoms[idx].number, structure.atoms[idx].residue.name, structure.atoms[idx].residue.number, structure.atoms[idx].xx, structure.atoms[idx].xy, structure.atoms[idx].xz] for idx in ambermask_solvent.Selected()]
+		info_solvent = [[structure.atoms[idx].idx, structure.atoms[idx].residue.name, structure.atoms[idx].residue.number, structure.atoms[idx].xx, structure.atoms[idx].xy, structure.atoms[idx].xz] for idx in ambermask_solvent.Selected()]
 
 		flag_first = True
 		residue_info = ""
@@ -140,19 +146,39 @@ if __name__ == '__main__':
 		# 距離モードの場合
 		for remain_info in remain_list:
 			if remain_info[2] <= args.distance:
-				remain_mask.extend(remain_info[3])
+				remain_idx.extend(remain_info[3])
 
 	elif args.number is not None:
 		# 数モードの場合
 		cnt = 0
 		for remain_info in sorted(remain_list, key = lambda x : x[2]):
-			remain_mask.extend(remain_info[3])
+			remain_idx.extend(remain_info[3])
 			cnt += 1
 			if args.number < cnt:
 				break
 
-	structure.strip("!@" + summarized_range(remain_mask))
-
 	if args.flag_overwrite == False:
 		check_overwrite(args.output)
-	structure.write_pdb(args.output, renumber = True)
+
+	atom_idx = 0
+	flag_ter = False
+	with open(args.output, "w") as obj_output:
+		with open(args.input, "r") as obj_input:
+			for line in obj_input:
+				# PDB の読み込み
+				if re_atom.search(line):
+					# ATOM レコードの場合
+					if atom_idx in remain_idx:
+						# 残すリストの atom_id と一致する場合、書き込み
+						obj_output.write(line)
+						flag_ter = False
+					atom_idx += 1
+
+				elif re_ter.search(line):
+					# TER レコードの場合
+					if flag_ter == False:
+						obj_output.write("TER\n")
+						flag_ter = True
+
+				elif re_end.search(line):
+					obj_output.write("END\n")
