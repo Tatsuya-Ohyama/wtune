@@ -12,7 +12,7 @@ import argparse
 import parmed
 import numpy as np
 from scipy.spatial import distance
-from basic_func import check_exist, check_overwrite, summarized_range
+from basic_func import check_exist, check_overwrite, get_file_length
 from tqdm import tqdm
 import tempfile
 import os
@@ -168,10 +168,11 @@ if __name__ == '__main__':
 	flag_ter = False
 	temp_name = ""
 	remain_idx = sorted(remain_idx)
+	max_line = get_file_length(args.input)
 	with tempfile.NamedTemporaryFile(mode = "w", dir = ".", prefix = ".wtune_", delete = False) as obj_output:
 		temp_name = obj_output.name
 		with open(args.input, "r") as obj_input:
-			for line in obj_input:
+			for line in tqdm(obj_input, desc = "Output", ascii = True, leave = False, total = max_line):
 				# PDB の読み込み
 				if re_atom.search(line):
 					# ATOM レコードの場合
