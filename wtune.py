@@ -14,6 +14,8 @@ import numpy as np
 from scipy.spatial import distance
 from basic_func import check_exist, check_overwrite, summarized_range
 from tqdm import tqdm
+import tempfile
+import os
 
 
 # =============== variables =============== #
@@ -65,8 +67,6 @@ if __name__ == '__main__':
 
 	check_exist(args.input, 2)
 
-	re_record_atom = re.compile(r"^((ATOM)|(HETATM))")
-
 	if args.view == True:
 		# 内容表示
 		with open(args.input, "r") as f_obj:
@@ -77,7 +77,7 @@ if __name__ == '__main__':
 			residue = ""
 			resnum = ""
 			for line in f_obj:
-				if re.search(re_record_atom, line):
+				if re.search(re_atom, line):
 					a_count += 1
 					if line[17:20] + line[22:26] != residue + resnum:
 						residue = line[17:20]
@@ -94,7 +94,11 @@ if __name__ == '__main__':
 	else:
 		# ファイルの読み込み
 		check_exist(args.input, 2)
+		sys.stderr.write("Loading PDB file as topology information.")
+		sys.stderr.flush()
 		structure = parmed.load_file(args.input)
+		sys.stderr.write("\033[2K\033[G")
+		sys.stderr.flush()
 
 		# マスクの設定
 		ambermask_solvent = parmed.amber.AmberMask(structure, args.mask_solvent)
@@ -107,7 +111,7 @@ if __name__ == '__main__':
 			ambermask_solute = parmed.amber.AmberMask(structure, args.mask_solute)
 
 		# 残すマスクを作成
-		remain_idx = [structure.atoms[idx].idx for idx in ambermask_solute.Selected()]
+		remain_idx = sorted(list(set([obj_atom.idx for obj_atom in structure.atoms]) - set([structure.atoms[idx].idx for idx in ambermask_solvent.Selected()])))
 
 		# 溶質分子の座標取得
 		coord_solute = np.array([[structure.atoms[idx].xx, structure.atoms[idx].xy, structure.atoms[idx].xz] for idx in ambermask_solute.Selected()])
@@ -162,7 +166,10 @@ if __name__ == '__main__':
 
 	atom_idx = 0
 	flag_ter = False
-	with open(args.output, "w") as obj_output:
+	temp_name = ""
+	remain_idx = sorted(remain_idx)
+	with tempfile.NamedTemporaryFile(mode = "w", dir = ".", prefix = ".wtune_", delete = False) as obj_output:
+		temp_name = obj_output.name
 		with open(args.input, "r") as obj_input:
 			for line in obj_input:
 				# PDB の読み込み
@@ -171,6 +178,7 @@ if __name__ == '__main__':
 					if atom_idx in remain_idx:
 						# 残すリストの atom_id と一致する場合、書き込み
 						obj_output.write(line)
+						remain_idx.remove(atom_idx)
 						flag_ter = False
 					atom_idx += 1
 
@@ -182,3 +190,5 @@ if __name__ == '__main__':
 
 				elif re_end.search(line):
 					obj_output.write("END\n")
+
+	os.rename(temp_name, args.output)
