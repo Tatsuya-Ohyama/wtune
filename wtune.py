@@ -124,7 +124,7 @@ if __name__ == '__main__':
 		atom_list = []
 		coord_solvent = []
 		remain_list = []	# [[residue_name, residue_number, distance, [atom_number, ...]], ...]
-		for atom_record in tqdm(info_solvent, desc = "Calculate distance", ascii = True):
+		for atom_record in tqdm(info_solvent, desc = "Calculate distance", ascii = True, leave = False):
 			if residue_info != "{0[1]}.{0[2]}".format(atom_record):
 				# 残基名が異なる場合
 				if flag_first == False:
