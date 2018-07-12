@@ -96,9 +96,8 @@ if __name__ == '__main__':
 		check_exist(args.input, 2)
 		sys.stderr.write("Loading PDB file as topology information.")
 		sys.stderr.flush()
+
 		structure = parmed.load_file(args.input)
-		sys.stderr.write("\033[2K\033[G")
-		sys.stderr.flush()
 
 		# マスクの設定
 		ambermask_solvent = parmed.amber.AmberMask(structure, args.mask_solvent)
@@ -118,6 +117,9 @@ if __name__ == '__main__':
 
 		# 溶媒情報取得
 		info_solvent = [[structure.atoms[idx].idx, structure.atoms[idx].residue.name, structure.atoms[idx].residue.number, structure.atoms[idx].xx, structure.atoms[idx].xy, structure.atoms[idx].xz] for idx in ambermask_solvent.Selected()]
+
+		sys.stderr.write("\033[2K\033[G")
+		sys.stderr.flush()
 
 		flag_first = True
 		residue_info = ""
