@@ -178,11 +178,11 @@ if __name__ == '__main__':
 						# 溶質の書き出し
 						list_remain_solute_idx.remove(atom_idx)
 						obj_output.write(line)
+						flag_ter = False
 
 					elif atom_idx in list_remain_solvent_idx:
 						# 残す溶媒リストの atom_id と一致する場合、書き込み
 						cnt_write += 1
-						flag_ter = False
 						list_remain_solvent_idx.remove(atom_idx)
 						if args.number is not None and args.number < cnt_write:
 							# 数モードの場合、上限値を越えたらリストを削除し、書き込まない
@@ -196,10 +196,12 @@ if __name__ == '__main__':
 									obj_output.write(atom_info)
 								remain_mol = []
 						obj_output.write(line)
+						flag_ter = False
 
 					elif args.separate_mode == "molecule":
 						if flag_remain:
 							obj_output.write(line)
+							flag_ter = False
 						else:
 							remain_mol.append(line)
 
