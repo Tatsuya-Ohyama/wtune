@@ -42,6 +42,7 @@ if __name__ == '__main__':
 	group_strip_mode.add_argument("-n", "--number", dest = "number", metavar = "NUMBER", type = int, help = "specify the number of water molecules")
 	group_strip.add_argument("-ms", "--mask_solute", dest = "mask_solute", help = "ambermask for solvent molecules")
 	group_strip.add_argument("-mv", "--mask_solvent", dest = "mask_solvent", default = ":SOL,WAT,HOH", help = "ambermask for solvent molecules")
+	group_strip.add_argument("-S", "--separate", dest = "separate_mode", metavar = "SEPARATE_MODE", choices = ["atom", "residue", "molecule"], default = "residue", help = "remove solvent molecule by atom, residue or molecule (Default: Residue)")
 	group_strip.add_argument("-O", dest = "flag_overwrite", action = "store_true", default = False, help = "overwrite forcibly (Default: False)")
 
 	args = parser.parse_args()
@@ -98,50 +99,63 @@ if __name__ == '__main__':
 		list_solute_index = structure.set_mask(ambermask_solute).get_info("atom", "atom_index")
 		coord_solute = np.array([[structure.molecule.atoms[atom_index].xx, structure.molecule.atoms[atom_index].xy, structure.molecule.atoms[atom_index].xz] for atom_index in list_solute_index])
 
-		# 残すマスクを作成
-		list_remain_idx = list(set(structure.set_mask("*").get_info("atom", "atom_index")) - set(list_solvent_index))
+		# 溶質の原子インデックスリストを作成
+		list_remain_solute_idx = list(set(structure.set_mask("*").get_info("atom", "atom_index")) - set(list_solvent_index))
 
 		sys.stderr.write("\033[2K\033[G")
 		sys.stderr.flush()
 
 		flag_first = True
 		residue_info = ""
-		prev_residue_info = ""
-		atom_list = []
 		coord_solvent = []
 		list_info_distance = []	# [[residue_name, residue_number, distance, [atom_number, ...]], ...]
 		for solvent_idx in tqdm(list_solvent_index, desc = "Calculate distance", ascii = True, leave = False):
-			res_name = structure.molecule.atoms[solvent_idx].residue.name
-			res_idx = structure.molecule.atoms[solvent_idx].residue.number
-			if residue_info != "{0}.{1}".format(res_name, res_idx):
-				# 残基名が異なる場合
+			if args.separate_mode == "atom":
+				# 原子レベルでのチェック
 				if flag_first == False:
 					# 2 回目移行は距離を計算
-					list_info_distance[-1][2] = get_shortest_distance(coord_solute, np.array(coord_solvent))
+					list_info_distance[-1][1] = get_shortest_distance(coord_solute, np.array(coord_solvent))
 				else:
 					# 最初は登録するだけ
 					flag_first = False
 
-				residue_info = "{0}.{1}".format(res_name, res_idx)
-				list_info_distance.append([res_name, res_idx, 0.0, []])
-				atom_list = []
+				list_info_distance.append([[], 0.0])
 				coord_solvent = []
+
+			else:
+				# 残基レベルでのチェック
+				res_name = structure.molecule.atoms[solvent_idx].residue.name
+				res_idx = structure.molecule.atoms[solvent_idx].residue.number
+				if residue_info != "{0}.{1}".format(res_name, res_idx):
+					# 残基名が異なる場合
+					if flag_first == False:
+						# 2 回目移行は距離を計算
+						list_info_distance[-1][1] = get_shortest_distance(coord_solute, np.array(coord_solvent))
+					else:
+						# 最初は登録するだけ
+						flag_first = False
+
+					residue_info = "{0}.{1}".format(res_name, res_idx)
+					list_info_distance.append([[], 0.0])
+					coord_solvent = []
+
 			coord_solvent.append([structure.molecule.atoms[solvent_idx].xx, structure.molecule.atoms[solvent_idx].xy, structure.molecule.atoms[solvent_idx].xz])
-			list_info_distance[-1][3].append(solvent_idx)
+			list_info_distance[-1][0].append(solvent_idx)
 
 		if len(coord_solvent) != 0:
-			list_info_distance[-1][2] = get_shortest_distance(coord_solute, np.array(coord_solvent))
+			list_info_distance[-1][1] = get_shortest_distance(coord_solute, np.array(coord_solvent))
 
+	list_remain_solvent_idx = []
 	if args.distance is not None:
 		# 距離モードの場合
 		for info_distance in list_info_distance:
-			if info_distance[2] <= args.distance:
-				list_remain_idx.extend(info_distance[3])
+			if info_distance[1] <= args.distance:
+				list_remain_solvent_idx.extend(info_distance[0])
 
 	elif args.number is not None:
 		# 数モードの場合
-		for info_distance in sorted(list_info_distance, key = lambda x : x[2])[:args.number]:
-			list_remain_idx.extend(info_distance[3])
+		for info_distance in sorted(list_info_distance, key = lambda x : x[1]):
+			list_remain_solvent_idx.extend(info_distance[0])
 
 	if args.flag_overwrite == False:
 		check_overwrite(args.output)
@@ -149,8 +163,10 @@ if __name__ == '__main__':
 	atom_idx = 0
 	flag_ter = False
 	temp_name = ""
-	list_remain_idx = sorted(list_remain_idx)
 	max_line = get_file_length(args.input)
+	flag_remain = False
+	remain_mol = []
+	cnt_write = 0
 	with tempfile.NamedTemporaryFile(mode = "w", dir = ".", prefix = ".wtune_", delete = False) as obj_output:
 		temp_name = obj_output.name
 		with open(args.input, "r") as obj_input:
@@ -158,16 +174,41 @@ if __name__ == '__main__':
 				# PDB の読み込み
 				if line.startswith("ATOM") or line.startswith("HETATM"):
 					# ATOM レコードの場合
-					if atom_idx in list_remain_idx:
-						# 残すリストの atom_id と一致する場合、書き込み
-						print(atom_idx, line)
+					if atom_idx in list_remain_solute_idx:
+						# 溶質の書き出し
+						list_remain_solute_idx.remove(atom_idx)
 						obj_output.write(line)
-						list_remain_idx.remove(atom_idx)
+
+					elif atom_idx in list_remain_solvent_idx:
+						# 残す溶媒リストの atom_id と一致する場合、書き込み
+						cnt_write += 1
 						flag_ter = False
+						list_remain_solvent_idx.remove(atom_idx)
+						if args.number is not None and args.number < cnt_write:
+							# 数モードの場合、上限値を越えたらリストを削除し、書き込まない
+							list_remain_solvent_idx = []
+							continue
+
+						if args.separate_mode == "molecule":
+							flag_remain = True
+							if len(remain_mol) != 0:
+								for atom_info in remain_mol:
+									obj_output.write(atom_info)
+								remain_mol = []
+						obj_output.write(line)
+
+					elif args.separate_mode == "molecule":
+						if flag_remain:
+							obj_output.write(line)
+						else:
+							remain_mol.append(line)
+
 					atom_idx += 1
 
 				elif line.startswith("TER"):
 					# TER レコードの場合
+					flag_remain = False
+					remain_mol = []
 					if flag_ter == False:
 						obj_output.write("TER\n")
 						flag_ter = True
