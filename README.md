@@ -52,6 +52,9 @@ This software is released under the MIT License, see LICENSE.
 
 
 ## ChangeLog
+## Ver. 4.8 (2021-07-14)
+* バージョン管理システムを mercurial から git へ変更した。
+
 ### Ver. 4.7 (2021-07-14)
 * 公開した。
 * PEP8 スタイルにした。
