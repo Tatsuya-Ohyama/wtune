@@ -50,7 +50,7 @@ if __name__ == '__main__':
 	group_strip_mode = group_strip.add_mutually_exclusive_group(required=True)
 	group_strip_mode.add_argument("-d", "--distance", dest="DISTANCE", metavar="DISTANCE", type=float, help="specify the distance from solute")
 	group_strip_mode.add_argument("-n", "--number", dest="NUMBER", metavar="NUMBER", type=int, help="specify the number of water molecules")
-	group_strip.add_argument("-ms", "--mask_solute", dest="MASK_SOLUTE", help="ambermask for solvent molecules")
+	group_strip.add_argument("-ms", "--mask_solute", dest="MASK_SOLUTE", help="ambermask for solute molecules")
 	group_strip.add_argument("-mv", "--mask_solvent", dest="MASK_SOLVENT", default=":SOL,WAT,HOH", help="ambermask for solvent molecules")
 	group_strip.add_argument("-S", "--separate", dest="SEPARATE_MODE", metavar="SEPARATE_MODE", choices=["atom", "residue", "molecule"], default="residue", help="remove solvent molecule by atom, residue or molecule (Default: Residue)")
 	group_strip.add_argument("-O", dest="FLAG_OVERWRITE", action="store_true", default=False, help="overwrite forcibly (Default: False)")
