@@ -1,46 +1,53 @@
 # wtune
 
 ## 概要
-水分子を溶質からの特定の距離、および特定の数で切り出すプログラム
+溶媒分子を溶質からの特定の距離、および特定の数で切り出すプログラム
 
 
 ## 使用方法
+### View mode
+全原子と水分子数を表示して終了する。
+
 ```sh
-$ wtune.py [-h] [-V] -i INPUT_FILE -o OUTPUT_FILE (-d DISTANCE | -n NUMBER) [-ms MASK_SOLUTE] [-mv MASK_SOLVENT] [-S SEPARATE_MODE] [-O]
+$ wtune.py view [-h] -i INPUT.pdb
 ```
 
-* optional arguments:
-	* `-h`, `--help`
-		: ヘルプメッセージを表示して終了する。
+* `-h`, `--help`
+	: ヘルプメッセージを表示して終了する。
+* `-i INPUT.pdb`
+	: .pdb ファイル (Input)
 
-* View mode:
-	* `-V`, `--view`
-		: 全原子と水分子数を表示して終了する。
+### Extract mode
+溶媒分子を距離あるいは数で切り出す。
 
-* Strip mode:
-	* `-i INPUT_FILE`, `--input INPUT_FILE`
-		: .pdb ファイル (Input)
-	* `-o OUTPUT_FILE`, `--output OUTPUT_FILE`
-		: .pdb ファイル (Output)
-	* `-d DISTANCE`, `--distance DISTANCE`
-		: 溶質からの距離
-	* `-n NUMBER`, `--number NUMBER`
-		: 水分子数
-	* `-ms MASK_SOLUTE`, `--mask_solute MASK_SOLUTE`
-		: 溶質分子の Ambermask
-	* `-mv MASK_SOLVENT`, `--mask_solvent MASK_SOLVENT`
-		: 溶媒分子の Ambermask
-	* `-S SEPARATE_MODE`, `--separate SEPARATE_MODE`
-		: 溶媒分子を原子、残基、分子レベルで削除する (Default: Residue)
-	* `-O`
-		: プロンプトを出さずに上書きする (Default: False)。
+```sh
+$ wtune.py extract [-h] -i INPUT.pdb -o OUTPUT_FILE (-d DISTANCE | -n NUMBER) [-ms MASK_SOLUTE] [-mv MASK_SOLVENT] [-S SEPARATE_MODE] [-O]
+```
+
+* `-h`, `--help`
+	: ヘルプメッセージを表示して終了する。
+* `-i INPUT.pdb`
+	: .pdb ファイル (Input)
+* `-o OUTPUT_FILE`, `--output OUTPUT_FILE`
+	: .pdb ファイル (Output)
+* `-d DISTANCE`, `--distance DISTANCE`
+	: 切り出す溶媒分子を溶質からの距離で指定
+* `-n NUMBER`, `--number NUMBER`
+	: 切り出す溶媒分子を溶質から近い順に分子数で指定
+* `-ms MASK_SOLUTE`, `--mask_solute MASK_SOLUTE`
+	: 溶質分子の Ambermask
+* `-mv MASK_SOLVENT`, `--mask_solvent MASK_SOLVENT`
+	: 溶媒分子の Ambermask (Default: `:SOL,WAT,HOH`)
+* `-S SEPARATE_MODE`, `--separate SEPARATE_MODE`
+	: 切り出す対象モード (`atom` or `residue`) (Default: `residue`)
+* `-O`
+	: プロンプトを出さずに上書き
 
 
 ## 動作要件
 * Python3
 	* numpy
 	* scipy
-	* tqdm
 
 
 ## License
@@ -52,6 +59,13 @@ This software is released under the MIT License, see LICENSE.
 
 
 ## ChangeLog
+### Ver. 5.0 (2021-09-21)
+* プログラム全体を書き直した。
+	* 分子のトポロジーの処理を native の parmed に変更した。
+	* 不要な独自モジュールを削除した。
+	* Number モードが動作しないバグを修正した。
+	* View mode と Extract mode をサブコマンド化した。
+
 ## Ver. 4.8 (2021-07-14)
 * バージョン管理システムを mercurial から git へ変更した。
 
