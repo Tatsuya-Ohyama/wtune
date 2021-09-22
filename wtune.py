@@ -21,6 +21,7 @@ from mods.func_prompt_io import check_exist, check_overwrite
 WATER_RESIDUES = ["SOL", "WAT", "HOH"]
 
 
+
 # =============== functions =============== #
 def view_structure(input_file):
 	"""
@@ -50,8 +51,6 @@ def get_shortest_distance(coord_solute, coord_solvent):
 		float
 	"""
 	return scdi.cdist(coord_solute, coord_solvent).min()
-
-
 
 
 
@@ -107,6 +106,7 @@ if __name__ == '__main__':
 			ambermask_solute = args.MASK_SOLUTE
 		obj_ambermask_solute = parmed.amber.AmberMask(obj_mol, ambermask_solute)
 		list_atom_idx_solute = list(obj_ambermask_solute.Selected())
+		list_atom_idx_others = list(sorted(set(range(len(obj_mol.atoms))) - set(list_atom_idx_solute) - set(list_atom_idx_solvent)))
 
 		# get coordinates
 		coord_solute = np.array([[obj_mol.atoms[atom_index].xx, obj_mol.atoms[atom_index].xy, obj_mol.atoms[atom_index].xz] for atom_index in list_atom_idx_solute])
@@ -165,7 +165,7 @@ if __name__ == '__main__':
 
 				list_atom_idx_extract = list(sorted(set_atom_idx_extract))
 
-		remain_atom_idx = list_atom_idx_solute + list_atom_idx_extract
+		remain_atom_idx = sorted(list_atom_idx_solute + list_atom_idx_extract + list_atom_idx_others)
 
 		# delete atoms
 		list_mask = [1 for v in obj_mol.atoms]
