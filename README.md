@@ -48,6 +48,7 @@ $ wtune.py extract [-h] -i INPUT.pdb -o OUTPUT_FILE (-d DISTANCE | -n NUMBER) [-
 * Python3
 	* numpy
 	* scipy
+	* parmed
 
 
 ## License
@@ -59,6 +60,9 @@ This software is released under the MIT License, see LICENSE.
 
 
 ## ChangeLog
+### Ver. 5.1 (2021-09-22)
+* `-mv`, `-ms` で指定されていない原子が消えてしまうバグを修正した。
+
 ### Ver. 5.0 (2021-09-21)
 * プログラム全体を書き直した。
 	* 分子のトポロジーの処理を native の parmed に変更した。
